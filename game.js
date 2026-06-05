@@ -2164,7 +2164,23 @@
       overlay.onclick = (e) => { if (e.target === overlay) advance(); };
     }
 
+    // TEMPORARY TESTING CHEAT — top up gems for sticker-buy testing.
+    // Ensures the player has at least STICKER_GEM_CHEAT gems on entering the
+    // Stickers screen so the "+" individual-sticker window can be exercised.
+    // Never reduces a higher existing balance; safe to call repeatedly.
+    // TODO(remove): delete this method and its call in showAlbum() when the
+    // Stickers feature no longer needs free test currency.
+    _applyStickerGemCheat() {
+      const STICKER_GEM_CHEAT = 50000;
+      const gems = Math.max(0, parseInt(this.app._save.gemsTotal, 10) || 0);
+      if (gems < STICKER_GEM_CHEAT) {
+        this.app._save.gemsTotal = STICKER_GEM_CHEAT;
+        saveSave(this.app._save);
+      }
+    }
+
     showAlbum(onBackCallback) {
+      this._applyStickerGemCheat();
       this._onAlbumBackCallback = onBackCallback;
       this.app.ui.showScreen("album-screen");
       document.documentElement.classList.add("album-screen-active");
