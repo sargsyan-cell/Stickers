@@ -77,6 +77,36 @@
   const ALBUM_FEATURES_INFO_TAP_SRC = "https://www.figma.com/api/mcp/asset/6a0f4487-017d-47c2-a7f0-8b28a0b067b5";
   const BP_STARS_PER_CARD = 10;
   const BP_XP_PER_TIER = 100;
+  // Battle Pass rewards — 10 tiers x 2 tracks = 20 slots. ~70% are sticker
+  // packs (14/20). Free track = lower/mid grades; Premium = higher grades.
+  // Sticker-pack rewards are granted via the shared pending-pack mechanism
+  // (addPendingStickerPack), so they open later in the Stickers tab.
+  const BP_REWARDS = {
+    free: [
+      { type: "pack", grade: 1 }, { type: "gems", amount: 50 },  { type: "pack", grade: 1 }, { type: "energy", amount: 20 },
+      { type: "pack", grade: 2 }, { type: "hammers", amount: 1 }, { type: "pack", grade: 2 }, { type: "pack", grade: 1 },
+      { type: "pack", grade: 2 }, { type: "pack", grade: 3 },
+    ],
+    premium: [
+      { type: "pack", grade: 2 }, { type: "pack", grade: 3 },     { type: "gems", amount: 150 }, { type: "pack", grade: 3 },
+      { type: "pack", grade: 4 }, { type: "energy", amount: 30 }, { type: "pack", grade: 3 },    { type: "hammers", amount: 3 },
+      { type: "pack", grade: 4 }, { type: "pack", grade: 5 },
+    ],
+  };
+  const BP_ROMAN = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V" };
+  // Reward icon + label markup for a Battle Pass slot (pack / gems / energy / hammers).
+  function bpRewardHTML(rw) {
+    if (!rw) return "";
+    if (rw.type === "pack") {
+      const meta = getStickerPackTier(rw.grade);
+      return '<span class="bp-pack-icon sticker-pack-tier--' + rw.grade + '" aria-hidden="true">'
+        + '<span class="bp-pack-band"></span><span class="bp-pack-star">' + meta.star + '</span></span>'
+        + '<span class="bp-tier-reward-count bp-pack-label">Pack ' + (BP_ROMAN[rw.grade] || rw.grade) + '</span>';
+    }
+    const emoji = rw.type === "gems" ? "💎" : rw.type === "energy" ? "⚡" : "🔨";
+    return '<span class="bp-reward-emoji" aria-hidden="true">' + emoji + '</span>'
+      + '<span class="bp-tier-reward-count">x' + (rw.amount || 1) + '</span>';
+  }
   const WHEEL_FREE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
   const WHEEL_SEGMENTS = 6;
   const WHEEL_SPIN_DURATION_MS = 3000;
@@ -250,6 +280,7 @@
       lastAnimatedInboxSignature: "",
       albums: {},
       cards: { collected: {}, newInbox: [], duplicates: {} },
+      stickerLevel: { placed: {}, unlocked: {}, firstPackOpened: false, pendingPacks: [] },
       albumStars: 0,
       eventHammers: 0,
       rewards: { trophies: 0, unlockedRewards: [], trophiesGoldCup: false },
@@ -301,11 +332,13 @@
       playerProfile: null,
       profileSetupCompleted: true,
       rubyCaveCompleted: 0,
-      rubyCaveEnergy: 5,
+      rubyCaveEnergy: 25,
+      rubyCaveEnergyV2: true,
       rubyCaveNextEnergyAt: null,
       rubyCaveEventEnd: null,
       rubyCaveTutorialDone: false,
       rubyCaveRewardClaimed: false,
+      rubyCaveStickerPlaced: {},
       puzzleEnergy: DEFAULT_PUZZLE_ENERGY,
       dailyTasksDateKey: "",
       dailyTasksClaims: {},
@@ -749,6 +782,41 @@
         if (typeof merged.piggyBroken !== "boolean") merged.piggyBroken = false;
         if (typeof merged.piggyEarnPerPiece !== "number") merged.piggyEarnPerPiece = PIGGY_EARN_PER_PIECE;
         if (typeof migrateLegacyCardIdsInSave === "function") migrateLegacyCardIdsInSave(merged);
+        if (!merged.stickerLevel || typeof merged.stickerLevel !== "object") {
+          merged.stickerLevel = { placed: {}, unlocked: {}, firstPackOpened: false };
+        }
+        // Migrate the previous free-placement array-of-{id,x,y} into a simple
+        // id->true map. Position is no longer stored — slots are fixed.
+        if (Array.isArray(merged.stickerLevel.placed)) {
+          const map = {};
+          merged.stickerLevel.placed.forEach((p) => {
+            if (p && typeof p === "object" && p.id) map[p.id] = true;
+          });
+          merged.stickerLevel.placed = map;
+        }
+        if (!merged.stickerLevel.placed || typeof merged.stickerLevel.placed !== "object") {
+          merged.stickerLevel.placed = {};
+        }
+        if (!merged.stickerLevel.unlocked || typeof merged.stickerLevel.unlocked !== "object") {
+          merged.stickerLevel.unlocked = {};
+        }
+        // Any sticker already placed must also count as unlocked so old saves
+        // don't end up with placed-but-not-unlocked entries.
+        Object.keys(merged.stickerLevel.placed).forEach((id) => {
+          if (merged.stickerLevel.placed[id]) merged.stickerLevel.unlocked[id] = true;
+        });
+        if (typeof merged.stickerLevel.firstPackOpened !== "boolean") {
+          const hasActivity = Object.keys(merged.stickerLevel.placed).length > 0
+            || Object.keys(merged.stickerLevel.unlocked).length > 0;
+          merged.stickerLevel.firstPackOpened = hasActivity;
+        }
+        // Pending sticker packs awarded by other features (e.g. Wheel of
+        // Fortune) that the player hasn't opened yet — a list of tier numbers.
+        if (!Array.isArray(merged.stickerLevel.pendingPacks)) {
+          merged.stickerLevel.pendingPacks = [];
+        }
+        // The previous multi-room sticker-album state is no longer used.
+        if (merged.stickerRooms) delete merged.stickerRooms;
         if (!merged.bpPremiumPackMeta || typeof merged.bpPremiumPackMeta !== "object") merged.bpPremiumPackMeta = {};
         if (typeof merged.lostTempleCurrentStage !== "number") merged.lostTempleCurrentStage = 0;
         if (!merged.lostTempleState || typeof merged.lostTempleState !== "object") merged.lostTempleState = null;
@@ -759,6 +827,13 @@
         if (typeof merged.puzzleEnergy !== "number") merged.puzzleEnergy = DEFAULT_PUZZLE_ENERGY;
         if (typeof merged.rubyCaveTutorialDone !== "boolean") merged.rubyCaveTutorialDone = false;
         if (typeof merged.rubyCaveRewardClaimed !== "boolean") merged.rubyCaveRewardClaimed = false;
+        // Event energy was raised from 5 to 25 — one-time top-up for old saves.
+        if (!merged.rubyCaveEnergyV2) {
+          merged.rubyCaveEnergy = 25;
+          merged.rubyCaveNextEnergyAt = null;
+          merged.rubyCaveEnergyV2 = true;
+        }
+        if (!merged.rubyCaveStickerPlaced || typeof merged.rubyCaveStickerPlaced !== "object") merged.rubyCaveStickerPlaced = {};
         if (typeof merged.dailyTasksDateKey !== "string") merged.dailyTasksDateKey = "";
         if (!merged.dailyTasksClaims || typeof merged.dailyTasksClaims !== "object") merged.dailyTasksClaims = {};
         if (!merged.dailyTasksProgress || typeof merged.dailyTasksProgress !== "object") {
@@ -1248,6 +1323,153 @@
     if (CARDS_BY_RARITY[r]) CARDS_BY_RARITY[r].push(id);
   });
 
+  // ---------------------------------------------------------------------------
+  // Sticker Level
+  // Tapping "Stickers" opens a single playable cozy isometric room. Twenty
+  // decor stickers live in a bottom tray; the player drags them into the room.
+  // No collection album, no themed sub-rooms — this is a flat, direct level.
+  // ---------------------------------------------------------------------------
+  const STICKER_LEVEL_TOTAL = 20;
+  // Each entry carries its own placement slot: a fixed normalized (x, y)
+  // position inside the isometric room and the surface the sticker "belongs"
+  // to (used for visual hints + future expansion). The 20 entries below are
+  // the complete fixed solution for the puzzle — no free placement.
+  // ===== Standalone Sticker Room: interior-object stickers =====
+  // Each sticker is a small isometric SVG that matches the apartment art so
+  // placing them organically furnishes the (otherwise empty) room. The art
+  // lives in STICKER_ART keyed by id; `emoji` is only a last-resort fallback.
+  const STICKER_ART = {
+    sofa: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="80,57.1 50,70 50,54 80,41.1" fill="#cf8ca6" /><polygon points="20,57.1 50,70 50,54 20,41.1" fill="#d998b0" /><polygon points="50,28.3 80,41.1 50,54 20,41.1" fill="#e3a0ba" /><polygon points="80,73.1 50,86 50,75 80,62.1" fill="#d98fab" /><polygon points="20,73.1 50,86 50,75 20,62.1" fill="#e3a0ba" /><polygon points="50,49.3 80,62.1 50,75 20,62.1" fill="#efb3c8" /><polygon points="38,81.0 31,84 31,69 38,66.0" fill="#d590ac" /><polygon points="24,81.0 31,84 31,69 24,66.0" fill="#df9eb6" /><polygon points="31,63.0 38,66.0 31,69 24,66.0" fill="#e9a8c0" /><polygon points="76,81.0 69,84 69,69 76,66.0" fill="#d590ac" /><polygon points="62,81.0 69,84 69,69 62,66.0" fill="#df9eb6" /><polygon points="69,63.0 76,66.0 69,69 62,66.0" fill="#e9a8c0" /></svg>`,
+    armchair: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="65,67.6 50,74 50,59 65,52.6" fill="#cf8ca6" /><polygon points="35,67.6 50,74 50,59 35,52.6" fill="#d998b0" /><polygon points="50,46.1 65,52.6 50,59 35,52.6" fill="#e3a0ba" /><polygon points="66,79.1 50,86 50,75 66,68.1" fill="#d98fab" /><polygon points="34,79.1 50,86 50,75 34,68.1" fill="#e3a0ba" /><polygon points="50,61.3 66,68.1 50,75 34,68.1" fill="#efb3c8" /></svg>`,
+    coffeetable: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="76,74.9 50,86 50,79 76,67.9" fill="#c694a8" /><polygon points="24,74.9 50,86 50,79 24,67.9" fill="#d6a6b9" /><polygon points="50,56.7 76,67.9 50,79 24,67.9" fill="#e2b2c2" /></svg>`,
+    table: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="74,71.7 50,82 50,77 74,66.7" fill="#caa0b2" /><polygon points="26,71.7 50,82 50,77 26,66.7" fill="#d8aabc" /><polygon points="50,56.4 74,66.7 50,77 26,66.7" fill="#e6b6c6" /><polygon points="30,82 34,84 34,93 30,91" fill="#c293a6" /><polygon points="70,82 66,84 66,93 70,91" fill="#b88598" /></svg>`,
+    bed: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="82,76.3 50,90 50,79 82,65.3" fill="#9f6f86" /><polygon points="18,76.3 50,90 50,79 18,65.3" fill="#b67e96" /><polygon points="50,51.6 82,65.3 50,79 18,65.3" fill="#c88fa6" /><polygon points="50,52.1 79,64.6 50,77 21,64.6" fill="#fdfdfd" /><polygon points="79,64.6 50,77 21,64.6" fill="#ef9fb8" /><polygon points="50,68.4 60,72.7 50,77 40,72.7" fill="#ffffff" stroke="#ecdce4" stroke-width="1"/></svg>`,
+    nightstand: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="62,80.9 50,86 50,71 62,65.9" fill="#a87a90" /><polygon points="38,80.9 50,86 50,71 38,65.9" fill="#bf8ca2" /><polygon points="50,60.7 62,65.9 50,71 38,65.9" fill="#cf9fb4" /></svg>`,
+    wardrobe: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="66,83.1 50,90 50,50 66,43.1" fill="#a87a90" /><polygon points="34,83.1 50,90 50,50 34,43.1" fill="#bf8ca2" /><polygon points="50,36.3 66,43.1 50,50 34,43.1" fill="#cf9fb4" /><line x1="50" y1="52" x2="50" y2="86" stroke="#9c7186" stroke-width="1.2"/></svg>`,
+    bookshelf: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="65,83.6 50,90 50,52 65,45.6" fill="#a87a90" /><polygon points="35,83.6 50,90 50,52 35,45.6" fill="#bf8ca2" /><polygon points="50,39.1 65,45.6 50,52 35,45.6" fill="#cf9fb4" /><line x1="36" y1="60" x2="64" y2="60" stroke="#a87a90" stroke-width="1"/><line x1="36" y1="70" x2="64" y2="70" stroke="#a87a90" stroke-width="1"/><line x1="36" y1="80" x2="64" y2="80" stroke="#a87a90" stroke-width="1"/><polygon points="46,61.7 51,63.9 46,66 41,63.9" fill="#f0a6c8" /><polygon points="54,62.6 58,64.3 54,66 50,64.3" fill="#ffd1e6" /><polygon points="48,71.7 53,73.9 48,76 43,73.9" fill="#f6a6cd" /></svg>`,
+    fridge: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="63,84.4 50,90 50,52 63,46.4" fill="#d3bdc9" /><polygon points="37,84.4 50,90 50,52 37,46.4" fill="#e2cdd8" /><polygon points="50,40.9 63,46.4 50,52 37,46.4" fill="#f4e3ec" /><line x1="50" y1="62" x2="62" y2="68" stroke="#cdb3c0" stroke-width="1.4"/></svg>`,
+    cabinet: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="68,80.3 50,88 50,66 68,58.3" fill="#b888a0" /><polygon points="32,80.3 50,88 50,66 32,58.3" fill="#c897ac" /><polygon points="50,50.6 68,58.3 50,66 32,58.3" fill="#d7a3b8" /><line x1="50" y1="66" x2="50" y2="84" stroke="#a87a90" stroke-width="1.2"/></svg>`,
+    counter: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="74,75.7 50,86 50,73 74,62.7" fill="#c493a6" /><polygon points="26,75.7 50,86 50,73 26,62.7" fill="#d6a6b9" /><polygon points="50,52.4 74,62.7 50,73 26,62.7" fill="#e3b6c6" /><polygon points="56,61.0 63,64.0 56,67 49,64.0" fill="#f0dde7" stroke="#c9a9ba" stroke-width="1"/></svg>`,
+    stove: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="66,79.1 50,86 50,72 66,65.1" fill="#a98fa0" /><polygon points="34,79.1 50,86 50,72 34,65.1" fill="#bda3b0" /><polygon points="50,58.3 66,65.1 50,72 34,65.1" fill="#cdb6c0" /><ellipse cx="44.0" cy="61.1424" rx="3" ry="1.4" fill="#5a4450"/><ellipse cx="56.0" cy="61.1424" rx="3" ry="1.4" fill="#5a4450"/><ellipse cx="44.0" cy="66.14240000000001" rx="3" ry="1.4" fill="#5a4450"/><ellipse cx="56.0" cy="66.14240000000001" rx="3" ry="1.4" fill="#5a4450"/></svg>`,
+    lamp: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><rect x="48.5" y="50" width="3" height="36" fill="#b88aaa"/><polygon points="40,50 60,50 56,36 44,36" fill="#f6cfe0" stroke="#e7b6cf" stroke-width="1"/><polygon points="50,82.3 59,86.1 50,90 41,86.1" fill="#cf9fb4" /></svg>`,
+    plant: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="58,84.6 50,88 50,78 58,74.6" fill="#a87a90" /><polygon points="42,84.6 50,88 50,78 42,74.6" fill="#bf8ca2" /><polygon points="50,71.1 58,74.6 50,78 42,74.6" fill="#c98fa6" /><ellipse cx="50" cy="68" rx="13" ry="9" fill="#f0a6c8"/><ellipse cx="50" cy="62" rx="9" ry="6" fill="#ffc0dd"/></svg>`,
+    rug: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="50,60.6 82,74.3 50,88 18,74.3" fill="#e7a9c2" /><polygon points="50,68.9 70,77.4 50,86 30,77.4" fill="#f3cfe0" opacity="0.9"/></svg>`,
+    tree: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><rect x="47" y="60" width="6" height="28" fill="#b58f7a"/><ellipse cx="50" cy="54" rx="20" ry="14" fill="#f6a6cd"/><ellipse cx="50" cy="46" rx="14" ry="10" fill="#ffb3d1" opacity="0.9"/></svg>`,
+    bench: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="68,68.3 50,76 50,71 68,63.3" fill="#cf8ca6" /><polygon points="32,68.3 50,76 50,71 32,63.3" fill="#d998b0" /><polygon points="50,55.6 68,63.3 50,71 32,63.3" fill="#e3a0ba" /><polygon points="68,78.3 50,86 50,79 68,71.3" fill="#b9879a" /><polygon points="32,78.3 50,86 50,79 32,71.3" fill="#c896a8" /><polygon points="50,63.6 68,71.3 50,79 32,71.3" fill="#d8a7b5" /></svg>`,
+    picture: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="36,38 64,38 64,74 36,74" fill="#cf9fb4" /><polygon points="40,42 60,42 60,70 40,70" fill="#f6dcef" /><polygon points="43,58 50,48 57,58" fill="#f0a6c8" /></svg>`,
+    clock: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><circle cx="50" cy="52" r="16" fill="#ffffff" stroke="#cf9fb4" stroke-width="4"/><line x1="50" y1="52" x2="50" y2="42" stroke="#9c7186" stroke-width="2"/><line x1="50" y1="52" x2="58" y2="56" stroke="#9c7186" stroke-width="2"/></svg>`,
+    flowers: `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" class="sticker-art"><polygon points="50,69.1 72,78.6 50,88 28,78.6" fill="#ead0da" /><circle cx="42" cy="77" r="3.2" fill="#ff9ec4"/><circle cx="50" cy="74" r="3.2" fill="#ffd1e6"/><circle cx="58" cy="77" r="3.2" fill="#ff9ec4"/><circle cx="47" cy="80" r="3.2" fill="#ffc0dd"/><circle cx="55" cy="81" r="3.2" fill="#ff9ec4"/></svg>`,
+  };
+
+  const STICKER_LEVEL_DECOR = [
+    { id: "sofa", name: "Sofa", emoji: "🛋️", x: 0.5, y: 0.7, surface: "floor" },
+    { id: "armchair", name: "Armchair", emoji: "🪑", x: 0.7, y: 0.74, surface: "floor" },
+    { id: "coffeetable", name: "Coffee Table", emoji: "🪑", x: 0.5, y: 0.78, surface: "floor" },
+    { id: "table", name: "Dining Table", emoji: "🍽️", x: 0.4, y: 0.66, surface: "floor" },
+    { id: "bed", name: "Bed", emoji: "🛏️", x: 0.3, y: 0.66, surface: "floor" },
+    { id: "nightstand", name: "Nightstand", emoji: "🗄️", x: 0.2, y: 0.62, surface: "floor" },
+    { id: "wardrobe", name: "Wardrobe", emoji: "🗄️", x: 0.22, y: 0.58, surface: "floor" },
+    { id: "bookshelf", name: "Bookshelf", emoji: "📚", x: 0.78, y: 0.58, surface: "floor" },
+    { id: "fridge", name: "Fridge", emoji: "🧊", x: 0.82, y: 0.6, surface: "floor" },
+    { id: "cabinet", name: "Cabinet", emoji: "🗄️", x: 0.78, y: 0.64, surface: "floor" },
+    { id: "counter", name: "Kitchen Counter", emoji: "🍳", x: 0.66, y: 0.66, surface: "floor" },
+    { id: "stove", name: "Stove", emoji: "🔥", x: 0.58, y: 0.62, surface: "floor" },
+    { id: "lamp", name: "Floor Lamp", emoji: "💡", x: 0.86, y: 0.66, surface: "floor" },
+    { id: "plant", name: "Plant", emoji: "🪴", x: 0.3, y: 0.8, surface: "floor" },
+    { id: "rug", name: "Rug", emoji: "🟪", x: 0.5, y: 0.86, surface: "floor" },
+    { id: "tree", name: "Blossom Tree", emoji: "🌸", x: 0.66, y: 0.84, surface: "decor" },
+    { id: "bench", name: "Bench", emoji: "🪑", x: 0.16, y: 0.72, surface: "floor" },
+    { id: "picture", name: "Wall Art", emoji: "🖼️", x: 0.38, y: 0.44, surface: "wall" },
+    { id: "clock", name: "Wall Clock", emoji: "🕰️", x: 0.62, y: 0.44, surface: "wall" },
+    { id: "flowers", name: "Flower Bed", emoji: "🌷", x: 0.56, y: 0.82, surface: "floor" },
+    // Character + room-part + decor stickers (sold in the Shop; emoji art).
+    { id: "cat", name: "Cat", emoji: "🐱", x: 0.50, y: 0.74, surface: "floor" },
+    { id: "dog", name: "Dog", emoji: "🐶", x: 0.44, y: 0.76, surface: "floor" },
+    { id: "rabbit", name: "Rabbit", emoji: "🐰", x: 0.60, y: 0.76, surface: "floor" },
+    { id: "bear", name: "Bear", emoji: "🐻", x: 0.36, y: 0.78, surface: "floor" },
+    { id: "door", name: "Door", emoji: "🚪", x: 0.30, y: 0.40, surface: "wall" },
+    { id: "window", name: "Window", emoji: "🪟", x: 0.70, y: 0.38, surface: "wall" },
+    { id: "mirror", name: "Mirror", emoji: "🪞", x: 0.22, y: 0.48, surface: "wall" },
+    { id: "garland", name: "Garland", emoji: "🎐", x: 0.50, y: 0.34, surface: "wall" },
+    { id: "speaker", name: "Speaker", emoji: "🔊", x: 0.80, y: 0.70, surface: "floor" },
+  ];
+
+  // ===== Sticker Shop catalog =====================================
+  // Categories of buyable stickers (referencing STICKER_LEVEL_DECOR ids). Each
+  // category has its own gem price. Icons are the category tab glyphs.
+  const SHOP_CATALOG = [
+    { key: "cats", label: "Cats", icon: "🐱", price: 20, items: ["cat", "dog", "rabbit", "bear"] },
+    { key: "furniture", label: "Furniture", icon: "🛋️", price: 15, items: ["sofa", "armchair", "coffeetable", "table", "bed", "nightstand", "wardrobe", "bookshelf", "cabinet", "bench", "fridge", "counter", "stove"] },
+    { key: "doors", label: "Doors", icon: "🚪", price: 20, items: ["door", "window", "mirror"] },
+    { key: "plants", label: "Plants", icon: "🪴", price: 10, items: ["plant", "tree", "flowers", "rug", "lamp"] },
+    { key: "wallart", label: "Wall Art", icon: "🖼️", price: 10, items: ["picture", "clock", "garland", "speaker"] },
+  ];
+
+  // Inject a sticker's iso-art SVG into an element (fallback to emoji glyph).
+  function setStickerArt(el, def) {
+    if (!el) return;
+    const art = def && STICKER_ART[def.id];
+    if (art) { el.innerHTML = art; el.classList.add("has-sticker-art"); }
+    else { el.textContent = (def && def.emoji) || "\u2728"; }
+  }
+
+  // The five selectable sticker packs, ordered weakest → most premium. Each
+  // grants a random count within [min, max] (inclusive). All free for now —
+  // no price/currency/ad. Visual tier styling lives in styles.css
+  // (.sticker-pack-tier--1 … --5). `star` is the glyph shown on the pack art.
+  const STICKER_PACK_TIERS = [
+    { tier: 1, label: "Basic",     min: 1, max: 1, star: "·",  price: "$1", gem: 10 },
+    { tier: 2, label: "Common",    min: 2, max: 3, star: "✦",  price: "$3", gem: 25 },
+    { tier: 3, label: "Rare",      min: 4, max: 5, star: "✧",  price: "$5", gem: 50 },
+    { tier: 4, label: "Epic",      min: 6, max: 7, star: "★",  price: "$7", gem: 90 },
+    { tier: 5, label: "Legendary", min: 9, max: 9, star: "✨", price: "$9", gem: 150 },
+  ];
+  const SHOP_PACK_ROMAN = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V" };
+  // Shop tabs now sell PACKS (not individual stickers).
+  const SHOP_PACK_TABS = [
+    { key: "packs", label: "Packs", icon: "🎁", tiers: [1, 2, 3, 4, 5] },
+    { key: "premium", label: "Premium", icon: "👑", tiers: [3, 4, 5] },
+  ];
+
+  function getStickerPackTier(tier) {
+    return STICKER_PACK_TIERS.find((t) => t.tier === tier) || STICKER_PACK_TIERS[0];
+  }
+
+  // Display label for a sticker-pack reward, e.g. "Sticker Pack I",
+  // "Sticker Pack III", "Rare Sticker Pack IV". Grade 4+ reads as "Rare".
+  function stickerPackRewardLabel(tier) {
+    const roman = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V" }[tier] || String(tier);
+    return (tier >= 4 ? "Rare " : "") + "Sticker Pack " + roman;
+  }
+
+  // Pack-opening reveal (Battle Pass / Wheel / Star Chest) still uses the
+  // legacy card data internally; this helper supplies an emoji thumbnail so the
+  // reveal looks like a sticker even though hi-res card art is unavailable.
+  const STICKER_EMOJI_BY_ALBUM = {
+    africa: ["🐘", "🦒", "🦁", "🦓", "🌊", "🌅", "🌳", "🏝️", "🥁"],
+    fantasy: ["🐉", "🏰", "🌲", "🪄", "🦄", "🎩", "💰", "🧚", "🛡️"],
+    pixar: ["🤖", "🎒", "🦝", "✈️", "🍽️", "🛁", "📚", "🌳", "👹"],
+    holiday: ["🏠", "🎄", "🍪", "🎅", "🎆", "☕", "🦌", "⛄", "🎁"],
+    space: ["🪐", "🚀", "👽", "🗡️", "🛰️", "🤖", "🏜️", "💫", "✨"],
+    postapoc: ["🌱", "🌿", "🚐", "🐦", "🪧", "🌻", "🐕", "🍄", "🌄"],
+    paris: ["🗼", "☕", "⛵", "🎹", "🏛️", "🪜", "🥐", "🚇", "☔"],
+    victorian: ["🚂", "💡", "⏱️", "🎩", "📖", "🚉", "🫖", "🕯️", "🗝️"],
+  };
+
+  function getStickerEmoji(stickerId) {
+    const def = CARD_DEFS[stickerId];
+    if (!def) return "🎴";
+    const list = STICKER_EMOJI_BY_ALBUM[def.albumId] || [];
+    const idx = (def.albumId && def.albumId.length)
+      ? parseInt(stickerId.slice(def.albumId.length + 1), 10) || 0
+      : 0;
+    return list[idx] || "🎴";
+  }
+
+  function getStickerLevelDef(stickerId) {
+    return STICKER_LEVEL_DECOR.find((d) => d.id === stickerId) || null;
+  }
+
   function getDuplicateStarRewardByCard(cardId, fallbackRarity) {
     const def = CARD_DEFS[cardId] || null;
     const stars = def && typeof def.rarityStars === "number" ? def.rarityStars : (typeof fallbackRarity === "number" ? fallbackRarity : 1);
@@ -1553,13 +1775,17 @@
           cardPool.push(allCardIds[i % allCardIds.length]);
         }
       }
+      // Six wheel segments. Sticker packs (Grade 1 / 3 / rare Grade 4) are
+      // awarded to the Stickers feature as pending packs; gems and boosters
+      // (hammers) stay; one card keeps the collection relevant. Order is
+      // interleaved so adjacent segments look distinct on the wheel.
       return [
-        { type: "card", cardId: cardPool[0] },
-        { type: "card", cardId: cardPool[1] },
-        { type: "card", cardId: cardPool[2] },
-        { type: "card", cardId: cardPool[3] },
+        { type: "stickerpack", tier: 1 },
+        { type: "gems", amount: 100 },
+        { type: "stickerpack", tier: 3 },
         { type: "hammers", amount: 3 },
-        { type: "pack", packStars: 2, cardCount: 3 },
+        { type: "stickerpack", tier: 4 },
+        { type: "card", cardId: cardPool[0] },
       ];
     }
 
@@ -1590,6 +1816,7 @@
         const album = this._save.albums[def.id];
         if (album) album.collectedCount = 0;
       });
+      this._save.stickerRooms = {};
       this._persist();
     }
 
@@ -1686,6 +1913,146 @@
         };
       });
     }
+
+    // ---- Sticker Level (single playable room, slot-based, pack-gated) ----
+    _ensureStickerLevel() {
+      if (!this._save.stickerLevel || typeof this._save.stickerLevel !== "object") {
+        this._save.stickerLevel = { placed: {}, unlocked: {}, firstPackOpened: false };
+      }
+      const sl = this._save.stickerLevel;
+      if (!sl.placed || typeof sl.placed !== "object" || Array.isArray(sl.placed)) sl.placed = {};
+      if (!sl.unlocked || typeof sl.unlocked !== "object" || Array.isArray(sl.unlocked)) sl.unlocked = {};
+      if (typeof sl.firstPackOpened !== "boolean") sl.firstPackOpened = false;
+      if (!Array.isArray(sl.pendingPacks)) sl.pendingPacks = [];
+      return sl;
+    }
+
+    // Pending sticker packs (tier numbers) awarded elsewhere and not yet opened.
+    getPendingStickerPacks() {
+      return this._ensureStickerLevel().pendingPacks.slice();
+    }
+
+    addPendingStickerPack(tier) {
+      const t = Math.max(1, Math.min(5, parseInt(tier, 10) || 1));
+      const sl = this._ensureStickerLevel();
+      sl.pendingPacks.push(t);
+      this._persist();
+      return t;
+    }
+
+    // Remove the first pending pack of the given tier (identical tiers are
+    // interchangeable). Returns true if one was removed.
+    consumePendingStickerPack(tier) {
+      const sl = this._ensureStickerLevel();
+      const idx = sl.pendingPacks.indexOf(Math.max(1, Math.min(5, parseInt(tier, 10) || 1)));
+      if (idx < 0) return false;
+      sl.pendingPacks.splice(idx, 1);
+      this._persist();
+      return true;
+    }
+
+    getStickerLevelState() {
+      const sl = this._ensureStickerLevel();
+      const placedMap = sl.placed;
+      const unlockedMap = sl.unlocked;
+      // tray = unlocked AND not placed
+      const tray = STICKER_LEVEL_DECOR.filter((d) => unlockedMap[d.id] && !placedMap[d.id]);
+      // pool from which packs draw = neither unlocked nor placed
+      const lockedPool = STICKER_LEVEL_DECOR.filter((d) => !unlockedMap[d.id] && !placedMap[d.id]);
+      const placedCount = STICKER_LEVEL_DECOR.reduce((n, d) => n + (placedMap[d.id] ? 1 : 0), 0);
+      return {
+        unlockedMap,
+        placedMap,
+        tray,
+        lockedPool,
+        slots: STICKER_LEVEL_DECOR,
+        placedCount,
+        total: STICKER_LEVEL_DECOR.length,
+        firstPackOpened: sl.firstPackOpened,
+        canOpenPack: lockedPool.length > 0,
+        pendingPacks: sl.pendingPacks.slice(),
+      };
+    }
+
+    hasOpenedFirstPack() {
+      return !!this._ensureStickerLevel().firstPackOpened;
+    }
+
+    markFirstPackOpened() {
+      this._ensureStickerLevel().firstPackOpened = true;
+      this._persist();
+    }
+
+    // Picks `count` random unique stickers from the still-locked pool (the pool
+    // is already duplicate-free). Returns fewer than requested if the pool is
+    // nearly empty. Defaults to 1 when no count is given.
+    rollStickerPack(count) {
+      const pool = this.getStickerLevelState().lockedPool;
+      if (pool.length === 0) return [];
+      const desired = Math.min(pool.length, Math.max(1, Math.floor(count) || 1));
+      // Fisher-Yates shuffle
+      const arr = pool.slice();
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+      }
+      return arr.slice(0, desired);
+    }
+
+    unlockStickers(stickerIds) {
+      const sl = this._ensureStickerLevel();
+      (stickerIds || []).forEach((id) => {
+        if (getStickerLevelDef(id)) sl.unlocked[id] = true;
+      });
+      this._persist();
+    }
+
+    // Free placement. The player drops a sticker anywhere inside the room and
+    // we persist its normalized {x, y} position. Requires the sticker to be
+    // unlocked. `pos` defaults to the sticker's catalog position when omitted.
+    placeStickerInLevel(stickerId, pos) {
+      const def = getStickerLevelDef(stickerId);
+      if (!def) return null;
+      const sl = this._ensureStickerLevel();
+      if (!sl.unlocked[stickerId]) return null;
+      const x = pos && typeof pos.x === "number" ? pos.x : def.x;
+      const y = pos && typeof pos.y === "number" ? pos.y : def.y;
+      sl.placed[stickerId] = { x, y };
+      this._persist();
+      const placedCount = STICKER_LEVEL_DECOR.reduce((n, d) => n + (sl.placed[d.id] ? 1 : 0), 0);
+      return {
+        placed: true,
+        placedCount,
+        total: STICKER_LEVEL_DECOR.length,
+        justCompleted: placedCount === STICKER_LEVEL_DECOR.length,
+      };
+    }
+
+    // Normalized {x, y} for a placed sticker. Falls back to the catalog
+    // position for legacy saves that stored `true` instead of a position.
+    getStickerPlacement(stickerId) {
+      const sl = this._ensureStickerLevel();
+      const p = sl.placed[stickerId];
+      const def = getStickerLevelDef(stickerId);
+      if (!def) return null;
+      if (p && typeof p === "object" && typeof p.x === "number" && typeof p.y === "number") {
+        return { x: p.x, y: p.y };
+      }
+      return { x: def.x, y: def.y };
+    }
+
+    resetStickerLevel() {
+      this._save.stickerLevel = { placed: {}, unlocked: {}, firstPackOpened: false };
+      this._persist();
+    }
+
+    // Cheat: unlock and place every sticker at its catalog position.
+    autoFillStickerLevel() {
+      const placed = {}, unlocked = {};
+      STICKER_LEVEL_DECOR.forEach((d) => { placed[d.id] = { x: d.x, y: d.y }; unlocked[d.id] = true; });
+      this._save.stickerLevel = { placed, unlocked, firstPackOpened: true };
+      this._persist();
+    }
   }
 
   class CollectionUI {
@@ -1774,8 +2141,8 @@
 
     _runTutorialThenAlbum(onDone) {
       const steps = [
-        "These are your cards! Complete levels to find new Blockies.",
-        "Tap NEW cards in your album to collect them.",
+        "These are your stickers! Complete levels to find new ones.",
+        "Drag stickers from the tray into their glowing spots in the room.",
       ];
       let stepIndex = 0;
       const bubble = document.getElementById("collection-tutorial-text");
@@ -1800,39 +2167,594 @@
     showAlbum(onBackCallback) {
       this._onAlbumBackCallback = onBackCallback;
       this.app.ui.showScreen("album-screen");
-      this._applyAlbumFigmaAssets();
       document.documentElement.classList.add("album-screen-active");
       document.body.classList.add("album-screen-active");
       if (this._albumEscapeHandler) window.removeEventListener("keydown", this._albumEscapeHandler);
       this._albumEscapeHandler = (e) => {
         if (e.key !== "Escape") return;
-        const featuresInfo = document.getElementById("albumFeaturesInfoOverlay");
-        if (featuresInfo && !featuresInfo.classList.contains("hidden")) {
-          this.closeAlbumFeaturesInfoOverlay();
-          e.preventDefault();
-          return;
-        }
-        const info = document.getElementById("albumInfoOverlay");
-        if (info && !info.classList.contains("hidden")) {
-          this.closeAlbumInfoOverlay();
-          e.preventDefault();
-          return;
-        }
-        if (this._collectionView === "albumDetail") {
-          this._onAlbumBackToHub();
-        } else {
-          this._onAlbumClose();
-        }
+        const overlay = document.getElementById("sticker-pack-overlay");
+        if (overlay && !overlay.classList.contains("hidden")) return; // pack overlay handles its own close
         e.preventDefault();
+        this._onAlbumClose();
       };
       window.addEventListener("keydown", this._albumEscapeHandler);
-      this.updateGlobalCardsProgress();
-      this.updateAlbumStarsUI();
-      this._collectionView = "hub";
-      this._showHubView();
-      this._startAlbumEventTimer();
-      this._bindAlbumInfoButton();
-      this._bindAlbumStarButton();
+      this._renderStickerLevel();
+      this._bindStickerLevelHeader();
+      // No auto-opened pack on first entry: the empty tray shows the "+" tile,
+      // which the player taps to open the 5-pack selection and seed the room.
+    }
+
+    _bindStickerLevelHeader() {
+      const homeBtn = document.getElementById("btn-sticker-level-home");
+      if (homeBtn) homeBtn.onclick = () => this._onAlbumClose();
+      const settingsBtn = document.getElementById("btn-sticker-level-settings");
+      if (settingsBtn) settingsBtn.onclick = () => {
+        if (this.app && typeof this.app.openSettings === "function") this.app.openSettings();
+      };
+    }
+
+    _renderStickerLevel() {
+      const tray = document.getElementById("sticker-level-tray");
+      const slotsHost = document.getElementById("sticker-level-placed");
+      const counter = document.getElementById("sticker-level-counter");
+      const pillLabel = document.getElementById("sticker-level-pill-label");
+      const pillFill = document.getElementById("sticker-level-pill-fill");
+      const pillPercent = document.getElementById("sticker-level-pill-percent");
+      if (!tray || !slotsHost) return;
+
+      const state = this.cm.getStickerLevelState();
+      const pct = state.total > 0 ? Math.round((state.placedCount / state.total) * 100) : 0;
+
+      // Bottom tray: only the unlocked-and-unplaced stickers, in catalog order.
+      // When the tray is empty AND the room isn't complete, append a "+" tile
+      // that opens another sticker pack.
+      tray.innerHTML = "";
+      // Pending packs (awarded by the Wheel of Fortune, etc.) appear first as
+      // tappable reward tiles that open with the pack-opening animation.
+      (state.pendingPacks || []).forEach((tier) => {
+        const meta = getStickerPackTier(tier);
+        const amount = meta.min === meta.max ? String(meta.min) : (meta.min + "–" + meta.max);
+        const packTile = document.createElement("button");
+        packTile.type = "button";
+        packTile.className = "sticker-level-tray-item sticker-level-tray-item--pack sticker-level-tray-item--pack-tier-" + tier;
+        packTile.setAttribute("aria-label", stickerPackRewardLabel(tier) + ", " + amount + " stickers");
+        packTile.title = stickerPackRewardLabel(tier);
+        packTile.style.touchAction = "manipulation";
+        packTile.innerHTML =
+          '<span class="sticker-level-pack-art" aria-hidden="true">' +
+            '<span class="sticker-level-pack-band"></span>' +
+            '<span class="sticker-level-pack-star">' + meta.star + '</span>' +
+          '</span>' +
+          '<span class="sticker-level-pack-badge">' + amount + '</span>';
+        const self = this;
+        let firing = false;
+        const fire = (e) => {
+          if (firing) return;
+          firing = true;
+          if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+          if (e && typeof e.preventDefault === "function") e.preventDefault();
+          setTimeout(() => { firing = false; }, 250);
+          self._openPendingStickerPack(tier);
+        };
+        packTile.addEventListener("click", fire);
+        packTile.addEventListener("pointerup", (e) => { if (e.button && e.button !== 0) return; fire(e); });
+        tray.appendChild(packTile);
+      });
+      state.tray.forEach((s) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "sticker-level-tray-item";
+        item.dataset.stickerId = s.id;
+        item.setAttribute("aria-label", s.name);
+        item.title = s.name;
+        const glyph = document.createElement("span");
+        glyph.className = "sticker-level-tray-glyph";
+        setStickerArt(glyph, s);
+        item.appendChild(glyph);
+        this._bindStickerLevelDrag(item, s);
+        tray.appendChild(item);
+      });
+      const roomComplete = state.placedCount >= state.total;
+      if (!roomComplete && state.tray.length === 0 && state.canOpenPack) {
+        const plus = document.createElement("button");
+        plus.type = "button";
+        plus.className = "sticker-level-tray-item sticker-level-tray-item--plus";
+        plus.setAttribute("aria-label", "Open another sticker pack");
+        plus.title = "Open another sticker pack";
+        // touch-action: manipulation tells the browser to skip the legacy
+        // 300ms tap-delay and double-tap zoom, so the tap converts straight
+        // to a click on touch devices inside the horizontally scrollable tray.
+        plus.style.touchAction = "manipulation";
+        plus.style.cursor = "pointer";
+        const glyph = document.createElement("span");
+        glyph.className = "sticker-level-tray-glyph sticker-level-tray-glyph--plus";
+        glyph.textContent = "+";
+        plus.appendChild(glyph);
+        const self = this;
+        let firing = false;
+        const fire = (e) => {
+          // Guard against double-fire from click + pointerup on the same tap.
+          if (firing) return;
+          firing = true;
+          if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+          if (e && typeof e.preventDefault === "function") e.preventDefault();
+          // Reset the guard on the next tick so a fresh tap still works after
+          // the overlay is closed.
+          setTimeout(() => { firing = false; }, 250);
+          // The "+" opens the INDIVIDUAL-sticker buy modal (separate from the
+          // Shop tab, which sells packs).
+          self._openStickerBuy();
+        };
+        plus.addEventListener("click", fire);
+        // Pointerup as a belt-and-braces fallback for touch environments where
+        // synthesized clicks fail (e.g., when the tray was just scrolled).
+        plus.addEventListener("pointerup", (e) => {
+          if (e.button && e.button !== 0) return;
+          fire(e);
+        });
+        tray.appendChild(plus);
+      }
+
+      // Free-placement room: render ONLY the stickers the player has already
+      // dropped, each at its persisted position. No silhouettes / ghost
+      // placeholders — the room is a free decorating canvas. Items are sorted
+      // back-to-front (by y) so closer stickers overlap farther ones.
+      slotsHost.innerHTML = "";
+      const placedDefs = state.slots
+        .filter((d) => state.placedMap[d.id])
+        .map((d) => {
+          const pos = this.cm.getStickerPlacement(d.id) || { x: d.x, y: d.y };
+          return { def: d, x: pos.x, y: pos.y };
+        })
+        .sort((a, b) => a.y - b.y);
+      placedDefs.forEach(({ def, x, y }) => {
+        const cell = document.createElement("span");
+        cell.className = "sticker-slot sticker-slot--filled sticker-slot--surface-" + def.surface;
+        cell.dataset.stickerId = def.id;
+        cell.dataset.surface = def.surface;
+        cell.style.left = (x * 100) + "%";
+        cell.style.top = (y * 100) + "%";
+        const depth = Math.max(0, Math.min(1, y));
+        const scale = 0.78 + depth * 0.42;
+        cell.style.setProperty("--iso-scale", scale.toFixed(3));
+        cell.style.zIndex = String(100 + Math.floor(depth * 900));
+        cell.title = def.name;
+        setStickerArt(cell, def);
+        slotsHost.appendChild(cell);
+      });
+
+      if (counter) counter.textContent = state.placedCount + "/" + state.total;
+      if (pillLabel) pillLabel.textContent = "LVL 1";
+      if (pillFill) pillFill.style.width = pct + "%";
+      if (pillPercent) pillPercent.textContent = pct + "%";
+    }
+
+    // Free placement: drag a sticker out of the tray and drop it anywhere
+    // inside the room. The drop point (clamped to sensible room bounds) becomes
+    // the sticker's persisted position. A drop outside the room bounces the
+    // tray tile back. There are no silhouettes and no "correct" target.
+    _bindStickerLevelDrag(itemEl, sticker) {
+      const self = this;
+      itemEl.style.touchAction = "none";
+      itemEl.onpointerdown = (e) => {
+        e.preventDefault();
+        if (itemEl.dataset.dragging === "1") return;
+        const room = document.getElementById("sticker-level-placed");
+        if (!room) return;
+        itemEl.dataset.dragging = "1";
+        itemEl.classList.add("sticker-level-tray-item--dragging");
+
+        const ghost = document.createElement("div");
+        ghost.className = "sticker-level-drag-ghost";
+        setStickerArt(ghost, sticker);
+        document.body.appendChild(ghost);
+        const place = (x, y) => { ghost.style.left = x + "px"; ghost.style.top = y + "px"; };
+        place(e.clientX, e.clientY);
+
+        try { itemEl.setPointerCapture(e.pointerId); } catch (_) {}
+
+        // Convert a screen point to a normalized {x, y} inside the room, or null
+        // when the point is outside the room rectangle.
+        const toRoomPos = (cx, cy) => {
+          const r = room.getBoundingClientRect();
+          if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) return null;
+          const nx = (cx - r.left) / r.width;
+          const ny = (cy - r.top) / r.height;
+          // Clamp to the apartment footprint (walls + all five zones: living,
+          // kitchen, bedroom, hallway and the front garden). The SVG apartment
+          // occupies roughly x 0.05..0.95, y 0.30..0.82 of the room box, so
+          // stickers drop across every zone (and the back walls) but not into
+          // the empty margins.
+          return {
+            x: Math.max(0.05, Math.min(0.95, nx)),
+            y: Math.max(0.30, Math.min(0.82, ny)),
+          };
+        };
+
+        const onMove = (mv) => { place(mv.clientX, mv.clientY); };
+        const cleanup = () => {
+          itemEl.onpointermove = null;
+          itemEl.onpointerup = null;
+          itemEl.onpointercancel = null;
+          itemEl.classList.remove("sticker-level-tray-item--dragging");
+          delete itemEl.dataset.dragging;
+          if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+          try { itemEl.releasePointerCapture(e.pointerId); } catch (_) {}
+        };
+        const bounce = () => {
+          itemEl.classList.add("sticker-level-tray-item--bounce");
+          setTimeout(() => itemEl.classList.remove("sticker-level-tray-item--bounce"), 320);
+        };
+        const onUp = (up) => {
+          const pos = toRoomPos(up.clientX, up.clientY);
+          cleanup();
+          if (pos) self._onStickerLevelPlace(sticker.id, pos);
+          else bounce();
+        };
+        itemEl.onpointermove = onMove;
+        itemEl.onpointerup = onUp;
+        itemEl.onpointercancel = () => { cleanup(); bounce(); };
+      };
+    }
+
+    _onStickerLevelPlace(stickerId, pos) {
+      const result = this.cm.placeStickerInLevel(stickerId, pos);
+      if (!result) return;
+      this._renderStickerLevel();
+      const placed = document.querySelector('#sticker-level-placed .sticker-slot[data-sticker-id="' + stickerId + '"]');
+      if (placed) {
+        placed.classList.add("sticker-slot--just-placed");
+        setTimeout(() => placed.classList.remove("sticker-slot--just-placed"), 700);
+      }
+      if (result.justCompleted) {
+        this._showStickerLevelComplete();
+      }
+    }
+
+    // ---- Sticker pack selection ------------------------------------------
+    // Tapping the "+" tile (or first-entry) shows five free, visually-tiered
+    // packs. The player picks one; its tier decides how many stickers roll.
+    _openStickerPackSelect(opts) {
+      opts = opts || {};
+      const overlay = document.getElementById("sticker-pack-select-overlay");
+      const list = document.getElementById("sticker-pack-select-list");
+      const closeBtn = document.getElementById("btn-sticker-pack-select-close");
+      const backdrop = overlay && overlay.querySelector(".sticker-pack-select-backdrop");
+      if (!overlay || !list) return;
+      // Nothing left to draw — don't surface an empty selection.
+      if (!this.cm.getStickerLevelState().canOpenPack) {
+        this._renderStickerLevel();
+        return;
+      }
+      list.innerHTML = "";
+      STICKER_PACK_TIERS.forEach((t) => {
+        const amount = t.min === t.max ? String(t.min) : (t.min + "–" + t.max);
+        const noun = (t.max === 1) ? " Sticker" : " Stickers";
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "sticker-pack-tier sticker-pack-tier--" + t.tier;
+        card.setAttribute("aria-label", t.label + " pack, " + amount + noun + ", " + t.price);
+        card.innerHTML =
+          '<span class="sticker-pack-tier-glow" aria-hidden="true"></span>' +
+          '<span class="sticker-pack-tier-art" aria-hidden="true">' +
+            '<span class="sticker-pack-tier-band"></span>' +
+            '<span class="sticker-pack-tier-star">' + t.star + '</span>' +
+          '</span>' +
+          '<span class="sticker-pack-tier-label">' + t.label + '</span>' +
+          '<span class="sticker-pack-tier-count">' + amount + noun + '</span>' +
+          '<span class="sticker-pack-price">' + t.price + '</span>';
+        // Fake shop purchase: tapping a pack "buys" it for free internally and
+        // goes straight into the pack-opening reveal (no payment / balance check).
+        card.onclick = (e) => { if (e) e.stopPropagation(); this._choosePack(t, opts); };
+        list.appendChild(card);
+      });
+      if (closeBtn) closeBtn.onclick = () => this._closeStickerPackSelect();
+      if (backdrop) backdrop.onclick = () => this._closeStickerPackSelect();
+      overlay.classList.remove("hidden");
+    }
+
+    _closeStickerPackSelect() {
+      const overlay = document.getElementById("sticker-pack-select-overlay");
+      if (overlay) overlay.classList.add("hidden");
+    }
+
+    // ===== Individual-sticker buy modal (opened by the "+" tile) ===========
+    // Separate from the Shop tab (which sells packs): here the player buys
+    // individual stickers by category with gems, or grabs a free random one.
+    _openStickerBuy() {
+      const ov = document.getElementById("sticker-buy-overlay");
+      if (!ov) return;
+      if (!this._buyCategory || !SHOP_CATALOG.some((c) => c.key === this._buyCategory)) {
+        this._buyCategory = SHOP_CATALOG[0].key;
+      }
+      this._renderStickerBuy();
+      ov.classList.remove("hidden");
+      const closeBtn = document.getElementById("btn-sticker-buy-close");
+      if (closeBtn) closeBtn.onclick = () => this._closeStickerBuy();
+      const backdrop = ov.querySelector(".sticker-buy-backdrop");
+      if (backdrop) backdrop.onclick = () => this._closeStickerBuy();
+    }
+
+    _closeStickerBuy() {
+      const ov = document.getElementById("sticker-buy-overlay");
+      if (ov) ov.classList.add("hidden");
+    }
+
+    _renderStickerBuy() {
+      // Currency pills.
+      const curHost = document.getElementById("sticker-buy-currencies");
+      if (curHost) {
+        const gems = Math.max(0, parseInt(this.app._save.gemsTotal, 10) || 0);
+        const coins = Math.max(0, parseInt(this.app._save.coins, 10) || 0);
+        const pill = (icon, val) => '<div class="shop-cur-pill"><span class="shop-cur-icon">' + icon
+          + '</span><span class="shop-cur-val">' + val + '</span><span class="shop-cur-plus">+</span></div>';
+        curHost.innerHTML = pill("💎", gems) + pill("🐾", coins);
+      }
+      // Category tabs.
+      const tabHost = document.getElementById("sticker-buy-tabs");
+      if (tabHost) {
+        tabHost.innerHTML = "";
+        SHOP_CATALOG.forEach((cat) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "shop-tab" + (cat.key === this._buyCategory ? " shop-tab--active" : "");
+          b.innerHTML = '<span class="shop-tab-icon">' + cat.icon + "</span>";
+          b.setAttribute("aria-label", cat.label);
+          b.onclick = () => { this._buyCategory = cat.key; this._renderStickerBuy(); };
+          tabHost.appendChild(b);
+        });
+      }
+      // Item grid.
+      const grid = document.getElementById("sticker-buy-grid");
+      if (!grid) return;
+      grid.innerHTML = "";
+      const cat = SHOP_CATALOG.find((c) => c.key === this._buyCategory) || SHOP_CATALOG[0];
+      const unlocked = (this.cm.getStickerLevelState().unlockedMap) || {};
+
+      // FREE / ad card (grants a random sticker).
+      const free = document.createElement("div");
+      free.className = "shop-card shop-card--special shop-card--free";
+      const fArt = document.createElement("div");
+      fArt.className = "shop-card-art";
+      setStickerArt(fArt, getStickerLevelDef(cat.items[Math.floor(Math.random() * cat.items.length)]));
+      free.innerHTML = '<div class="shop-card-head">FREE</div>';
+      free.appendChild(fArt);
+      const fBtn = document.createElement("button");
+      fBtn.type = "button";
+      fBtn.className = "shop-card-btn shop-card-btn--free";
+      fBtn.innerHTML = "FREE ▶";
+      fBtn.onclick = () => this._stickerBuyFree();
+      free.appendChild(fBtn);
+      grid.appendChild(free);
+
+      // Individual sticker cards.
+      cat.items.forEach((id) => {
+        const def = getStickerLevelDef(id);
+        if (!def) return;
+        const owned = !!unlocked[id];
+        const card = document.createElement("div");
+        card.className = "shop-card" + (owned ? " shop-card--owned" : "");
+        const art = document.createElement("div");
+        art.className = "shop-card-art";
+        setStickerArt(art, def);
+        card.appendChild(art);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "shop-card-btn shop-card-btn--buy" + (owned ? " shop-card-btn--owned" : "");
+        btn.innerHTML = owned ? "Owned ✓" : '<span class="shop-gem">💎</span> ' + cat.price;
+        if (!owned) btn.onclick = () => this._stickerBuyItem(id, cat.price);
+        card.appendChild(btn);
+        grid.appendChild(card);
+      });
+    }
+
+    _stickerBuyItem(id, price) {
+      const gems = Math.max(0, parseInt(this.app._save.gemsTotal, 10) || 0);
+      if (this.cm.getStickerLevelState().unlockedMap[id]) return;
+      if (gems < price) { this._stickerBuyToast("Not enough gems"); return; }
+      this.app._save.gemsTotal = gems - price;
+      saveSave(this.app._save);
+      this.cm.unlockStickers([id]);
+      this._renderStickerLevel();
+      const def = getStickerLevelDef(id);
+      this._stickerBuyToast("Got " + (def ? def.name : "sticker") + "!");
+      this._renderStickerBuy();
+    }
+
+    _stickerBuyFree() {
+      const pool = this.cm.getStickerLevelState().lockedPool || [];
+      if (!pool.length) { this._stickerBuyToast("All stickers collected!"); return; }
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      this.cm.unlockStickers([pick.id]);
+      this._renderStickerLevel();
+      this._stickerBuyToast("Got " + pick.name + "!");
+      this._renderStickerBuy();
+    }
+
+    _stickerBuyToast(msg) {
+      let t = document.getElementById("sticker-buy-toast");
+      if (!t) {
+        t = document.createElement("div");
+        t.id = "sticker-buy-toast";
+        t.className = "shop-toast";
+        const shell = document.querySelector("#sticker-buy-overlay .sticker-buy-shell");
+        if (shell) shell.appendChild(t);
+      }
+      t.textContent = msg;
+      t.classList.add("shop-toast--show");
+      clearTimeout(this._stickerBuyToastTimer);
+      this._stickerBuyToastTimer = setTimeout(() => t.classList.remove("shop-toast--show"), 1400);
+    }
+
+    _choosePack(tier, opts) {
+      this._closeStickerPackSelect();
+      const span = Math.max(0, tier.max - tier.min);
+      const count = tier.min + Math.floor(Math.random() * (span + 1));
+      this._openStickerPack(Object.assign({}, opts || {}, { count, tier: tier.tier }));
+    }
+
+    // Opens a pending (awarded) pack of the given tier. The grade decides the
+    // sticker count; collecting consumes the pending pack from the queue.
+    _openPendingStickerPack(tier) {
+      const meta = getStickerPackTier(tier);
+      const span = Math.max(0, meta.max - meta.min);
+      const count = meta.min + Math.floor(Math.random() * (span + 1));
+      this._openStickerPack({ count, tier, pendingTier: tier });
+    }
+
+    // Re-render the sticker tray only when its screen is actually on-screen.
+    refreshStickerLevelIfOpen() {
+      if (document.body.classList.contains("album-screen-active")) this._renderStickerLevel();
+    }
+
+    // ---- Sticker pack opening --------------------------------------------
+    // Roll the chosen pack's stickers from the locked pool, show the tier-themed
+    // closed-pack art, wait for a tap to play the burst, render the reveal
+    // cards, then add the stickers to the tray when Collect is pressed.
+    _openStickerPack(opts) {
+      opts = opts || {};
+      const els = this._getStickerPackEls();
+      if (!els) return;
+      const stickers = this.cm.rollStickerPack(opts.count || 1);
+      if (stickers.length === 0) {
+        // Defensive: if the locked pool drained between the click and now,
+        // make sure no stale overlay is left visible and re-render the tray.
+        // A pending (awarded) pack is still consumed so its dead tile clears.
+        if (opts.pendingTier != null) this.cm.consumePendingStickerPack(opts.pendingTier);
+        this._closeStickerPack();
+        this._renderStickerLevel();
+        return;
+      }
+      // Drop any prior handlers / state from a previous open.
+      this._clearStickerPackHandlers(els);
+      this._stickerPackCtx = { stickers, opts, opened: false };
+      this._resetStickerPackOverlay(els);
+      // Tier-theme the closed-pack art so the opening matches the chosen pack.
+      for (let t = 1; t <= 5; t++) els.art.classList.remove("sticker-pack-art--tier-" + t);
+      if (opts.tier) els.art.classList.add("sticker-pack-art--tier-" + opts.tier);
+      this._bindStickerPackHandlers(els);
+    }
+
+    _getStickerPackEls() {
+      const overlay = document.getElementById("sticker-pack-overlay");
+      const art = document.getElementById("sticker-pack-art");
+      const reveal = document.getElementById("sticker-pack-reveal");
+      const list = document.getElementById("sticker-pack-reveal-list");
+      const collectBtn = document.getElementById("btn-sticker-pack-collect");
+      const backdrop = overlay && overlay.querySelector(".sticker-pack-backdrop");
+      if (!overlay || !art || !reveal || !list || !collectBtn) return null;
+      return { overlay, art, reveal, list, collectBtn, backdrop };
+    }
+
+    _resetStickerPackOverlay(els) {
+      els.overlay.classList.remove("hidden");
+      els.art.classList.remove("hidden");
+      els.art.classList.remove("sticker-pack-art--bursting");
+      els.reveal.classList.add("hidden");
+      els.list.innerHTML = "";
+    }
+
+    _clearStickerPackHandlers(els) {
+      els.art.onclick = null;
+      els.art.onkeydown = null;
+      els.collectBtn.onclick = null;
+      if (els.backdrop) els.backdrop.onclick = null;
+    }
+
+    _bindStickerPackHandlers(els) {
+      const self = this;
+      const renderReveal = () => {
+        const ctx = self._stickerPackCtx;
+        if (!ctx) return;
+        els.art.classList.add("hidden");
+        els.reveal.classList.remove("hidden");
+        els.list.innerHTML = "";
+        ctx.stickers.forEach((s, i) => {
+          const item = document.createElement("div");
+          item.className = "sticker-pack-reveal-item";
+          item.style.animationDelay = (i * 90) + "ms";
+          item.setAttribute("role", "listitem");
+          const glyph = document.createElement("span");
+          glyph.className = "sticker-pack-reveal-glyph";
+          setStickerArt(glyph, s);
+          const name = document.createElement("span");
+          name.className = "sticker-pack-reveal-name";
+          name.textContent = s.name;
+          item.appendChild(glyph);
+          item.appendChild(name);
+          els.list.appendChild(item);
+        });
+      };
+      const openPack = (e) => {
+        if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+        const ctx = self._stickerPackCtx;
+        if (!ctx || ctx.opened) return;
+        ctx.opened = true;
+        els.art.classList.add("sticker-pack-art--bursting");
+        setTimeout(renderReveal, 460);
+      };
+      const collectPack = (e) => {
+        if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+        const ctx = self._stickerPackCtx;
+        if (!ctx) return;
+        if (!ctx.opened) {
+          // Collect tapped before the pack was opened — open then collect.
+          openPack();
+          setTimeout(() => self._collectStickerPack(), 480);
+          return;
+        }
+        self._collectStickerPack();
+      };
+      els.art.onclick = openPack;
+      els.art.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPack(e); } };
+      els.collectBtn.onclick = collectPack;
+      if (els.backdrop) {
+        els.backdrop.onclick = (e) => {
+          const ctx = self._stickerPackCtx;
+          if (ctx && ctx.opened) collectPack(e);
+        };
+      }
+    }
+
+    // Finalize the pack: persist the unlocked stickers, mark the intro pack as
+    // done (always — any successful collect satisfies the gate), close the
+    // overlay, and re-render the tray so the new stickers + plus tile reflect.
+    _collectStickerPack() {
+      const ctx = this._stickerPackCtx;
+      if (!ctx) return;
+      this.cm.unlockStickers(ctx.stickers.map((s) => s.id));
+      this.cm.markFirstPackOpened();
+      // If this was a pending (awarded) pack, remove it from the queue now that
+      // it's been opened and collected.
+      if (ctx.opts && ctx.opts.pendingTier != null) {
+        this.cm.consumePendingStickerPack(ctx.opts.pendingTier);
+      }
+      this._stickerPackCtx = null;
+      this._closeStickerPack();
+      this._renderStickerLevel();
+    }
+
+    _closeStickerPack() {
+      const els = this._getStickerPackEls();
+      if (!els) return;
+      els.overlay.classList.add("hidden");
+      this._clearStickerPackHandlers(els);
+      this._stickerPackCtx = null;
+    }
+
+    _showStickerLevelComplete() {
+      const stage = document.querySelector(".sticker-level-stage");
+      if (!stage) return;
+      let toast = stage.querySelector(".sticker-level-complete-toast");
+      if (!toast) {
+        toast = document.createElement("div");
+        toast.className = "sticker-level-complete-toast";
+        toast.innerHTML = '<span class="sticker-level-complete-icon">🎉</span><span>Apartment decorated!</span>';
+        stage.appendChild(toast);
+      }
+      toast.classList.remove("hidden");
+      clearTimeout(this._levelCompleteTimer);
+      this._levelCompleteTimer = setTimeout(() => toast.classList.add("hidden"), 2400);
     }
 
     openAlbumInfoOverlay() {
@@ -1985,7 +2907,7 @@
       const afterPopup = () => {
         this.app._openPackOpeningFlowGeneric(reward.packStars, reward.cardCount, afterPack);
       };
-      const text = reward.label + "\n+" + reward.coins + " coins\n+" + reward.cardCount + " cards pack";
+      const text = reward.label + "\n+" + reward.coins + " coins\n+" + reward.cardCount + " sticker pack";
       this._showStarChestReward(text, afterPopup);
     }
 
@@ -2020,7 +2942,7 @@
       if (detail) detail.classList.add("hidden");
       if (screen) screen.classList.remove("album-screen--detail");
       const titleEl = document.getElementById("album-screen-title");
-      if (titleEl) titleEl.textContent = "Cards Album";
+      if (titleEl) titleEl.textContent = "Sticker Rooms";
       const progressWrap = document.getElementById("album-header-progress");
       if (progressWrap) progressWrap.classList.add("hidden");
       if (backBtn) {
@@ -2041,20 +2963,15 @@
       if (screen) screen.classList.add("album-screen--detail");
       const def = ALBUM_DEFS.find((a) => a.id === this._selectedAlbumId);
       const titleEl = document.getElementById("album-screen-title");
-      if (titleEl) titleEl.textContent = def ? def.name : "Album";
+      if (titleEl) titleEl.textContent = def ? def.name : "Sticker Room";
       const progressWrap = document.getElementById("album-header-progress");
-      if (progressWrap) progressWrap.classList.remove("hidden");
-      this._updateAlbumProgress(this._selectedAlbumId);
-      this._updateDetailPagerUI();
+      if (progressWrap) progressWrap.classList.add("hidden");
       const backBtn = document.getElementById("btn-album-back");
       if (backBtn) {
         backBtn.classList.remove("hidden");
         backBtn.onclick = () => this._onAlbumBackToHub();
       }
-      const prevBtn = document.getElementById("btn-album-detail-prev");
-      const nextBtn = document.getElementById("btn-album-detail-next");
-      if (prevBtn) prevBtn.onclick = () => this._changeAlbumPage(-1);
-      if (nextBtn) nextBtn.onclick = () => this._changeAlbumPage(1);
+      this._renderStickerRoom(this._selectedAlbumId);
     }
 
     _onAlbumClose() {
@@ -2062,8 +2979,9 @@
         clearInterval(this._albumEventTimerId);
         this._albumEventTimerId = null;
       }
-      this.closeStarChestsModal();
-      this.closeAlbumFeaturesInfoOverlay();
+      if (typeof this._closeStickerPack === "function") this._closeStickerPack();
+      if (typeof this.closeStarChestsModal === "function") this.closeStarChestsModal();
+      if (typeof this.closeAlbumFeaturesInfoOverlay === "function") this.closeAlbumFeaturesInfoOverlay();
       if (this._albumEscapeHandler) {
         window.removeEventListener("keydown", this._albumEscapeHandler);
         this._albumEscapeHandler = null;
@@ -2073,7 +2991,7 @@
       const cb = this._onAlbumBackCallback;
       this._onAlbumBackCallback = null;
       if (cb) cb();
-      else this.app.ui.showScreen("game-screen");
+      else this.app.ui.showScreen("start-screen");
     }
 
     _onAlbumBackToHub() {
@@ -2101,29 +3019,23 @@
       if (!grid) return;
       grid.innerHTML = "";
       ALBUM_DEFS.forEach((def) => {
-        const p = this.getAlbumProgress(def.id);
+        const roomProgress = this.cm.getRoomProgress(def.id);
         const hasNew = this.albumHasNewCards(def.id);
+        const theme = getStickerRoomTheme(def.id);
         const tile = document.createElement("button");
         tile.type = "button";
-        tile.className = "album-cover-tile"
+        tile.className = "album-cover-tile sticker-room-tile"
           + (hasNew ? " album-cover-tile--new" : "")
-          + (p.collected >= p.total ? " album-cover-tile--complete" : "");
+          + (roomProgress.placed >= roomProgress.total ? " album-cover-tile--complete" : "");
         tile.dataset.albumId = def.id;
         const cover = document.createElement("div");
-        cover.className = "album-cover-tile-art";
-        const firstCardId = (def.cardIds && def.cardIds[0]) || null;
-        const imgSrc = firstCardId && CARD_DEFS[firstCardId] && CARD_DEFS[firstCardId].imageSrc ? CARD_DEFS[firstCardId].imageSrc : "";
-        if (imgSrc) {
-          const img = document.createElement("img");
-          img.src = imgSrc;
-          img.alt = "";
-          img.loading = "lazy";
-          img.onerror = () => cover.classList.add("album-cover-tile-art--placeholder");
-          cover.appendChild(img);
-        } else {
-          cover.classList.add("album-cover-tile-art--placeholder");
-          cover.textContent = "?";
-        }
+        cover.className = "album-cover-tile-art sticker-room-tile-art";
+        cover.style.background = theme.bg;
+        const firstStickerId = (def.cardIds && def.cardIds[0]) || null;
+        const emojiPreview = document.createElement("span");
+        emojiPreview.className = "sticker-room-tile-emoji";
+        emojiPreview.textContent = firstStickerId ? getStickerEmoji(firstStickerId) : "✨";
+        cover.appendChild(emojiPreview);
         tile.appendChild(cover);
         if (hasNew) {
           const ribbon = document.createElement("span");
@@ -2137,7 +3049,7 @@
         tile.appendChild(nameSpan);
         const pill = document.createElement("span");
         pill.className = "album-cover-tile-progress";
-        pill.textContent = p.collected + "/" + p.total;
+        pill.textContent = roomProgress.placed + "/" + roomProgress.total;
         tile.appendChild(pill);
         tile.onclick = () => this.openAlbum(def.id);
         grid.appendChild(tile);
@@ -2147,23 +3059,222 @@
     openAlbum(albumId) {
       this._selectedAlbumId = albumId;
       this._albumDetailPage = 1;
-      this._renderAlbumGrid(albumId);
-      this._updateAlbumProgress(albumId);
-      this._updateDetailPagerUI();
-      this._updateTapCollectHint();
       this._showDetailView();
       if (this._shouldAnimateNewPack()) {
-        const inbox = (this.cm.getState().cards.newInbox || []).slice();
-        const firstId = inbox[0];
-        const firstAlbumId = firstId && CARD_DEFS[firstId] ? CARD_DEFS[firstId].albumId : null;
-        if (firstAlbumId === albumId) {
-          const getTile = (cardId) => document.querySelector("#album-grid [data-card-id=\"" + cardId + "\"]");
-          const getImageSrc = (cardId) => (CARD_DEFS[cardId] && CARD_DEFS[cardId].imageSrc) || "";
-          this.packAnimator.play(inbox, getTile, getImageSrc, () => {
-            this.cm.setLastAnimatedInboxSignature(this._getInboxSignature());
-          });
+        this.cm.setLastAnimatedInboxSignature(this._getInboxSignature());
+      }
+    }
+
+    // ---- Sticker Room scene -----------------------------------------------
+    _renderStickerRoom(albumId) {
+      const id = albumId || this._selectedAlbumId;
+      const def = ALBUM_DEFS.find((a) => a.id === id);
+      if (!def) return;
+      const scene = document.getElementById("sticker-room-scene");
+      const slotsHost = document.getElementById("sticker-room-slots");
+      const placedHost = document.getElementById("sticker-room-placed");
+      const tray = document.getElementById("sticker-tray");
+      const emptyHint = document.getElementById("sticker-room-empty-hint");
+      const trayHint = document.getElementById("sticker-tray-hint");
+      const progressText = document.getElementById("sticker-room-progress-text");
+      const nameEl = document.getElementById("album-name");
+      if (!scene || !slotsHost || !placedHost || !tray) return;
+
+      const theme = getStickerRoomTheme(id);
+      scene.dataset.roomId = id;
+      scene.style.setProperty("--room-bg", theme.bg);
+      scene.style.setProperty("--room-floor", theme.floor);
+      scene.style.setProperty("--room-wall", theme.wall);
+      scene.style.setProperty("--room-accent", theme.accent);
+
+      if (nameEl) nameEl.textContent = def.name || "";
+
+      const stickers = this.cm.getStickersForRoom(id);
+      const progress = this.cm.getRoomProgress(id);
+      if (progressText) progressText.textContent = progress.placed + "/" + progress.total + " placed";
+
+      // Slot silhouettes (always 9, even for not-yet-owned stickers).
+      slotsHost.innerHTML = "";
+      placedHost.innerHTML = "";
+      stickers.forEach((s) => {
+        const slot = document.createElement("div");
+        slot.className = "sticker-slot" + (s.placed ? " sticker-slot--filled" : "");
+        if (s.owned && !s.placed) slot.classList.add("sticker-slot--target");
+        slot.dataset.stickerId = s.id;
+        slot.style.left = (s.slot.x * 100) + "%";
+        slot.style.top = (s.slot.y * 100) + "%";
+        slot.style.setProperty("--slot-scale", String(s.slot.scale));
+        const shadow = document.createElement("span");
+        shadow.className = "sticker-slot-shadow";
+        slot.appendChild(shadow);
+        if (s.placed) {
+          const placed = document.createElement("span");
+          placed.className = "sticker-placed-glyph";
+          placed.textContent = s.emoji;
+          placed.title = s.name;
+          slot.appendChild(placed);
+        } else {
+          const silhouette = document.createElement("span");
+          silhouette.className = "sticker-slot-silhouette";
+          silhouette.textContent = s.emoji;
+          silhouette.setAttribute("aria-hidden", "true");
+          slot.appendChild(silhouette);
+          if (s.owned) {
+            const sparkle = document.createElement("span");
+            sparkle.className = "sticker-slot-sparkle";
+            sparkle.textContent = "✨";
+            sparkle.setAttribute("aria-hidden", "true");
+            slot.appendChild(sparkle);
+          }
+        }
+        slotsHost.appendChild(slot);
+      });
+
+      // Tray — show every owned-but-unplaced sticker.
+      tray.innerHTML = "";
+      const ownedUnplaced = stickers.filter((s) => s.owned && !s.placed);
+      ownedUnplaced.forEach((s) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "sticker-tray-item" + (s.isNew ? " sticker-tray-item--new" : "");
+        item.dataset.stickerId = s.id;
+        item.setAttribute("aria-label", s.name);
+        item.title = s.name;
+        const glyph = document.createElement("span");
+        glyph.className = "sticker-tray-glyph";
+        glyph.textContent = s.emoji;
+        item.appendChild(glyph);
+        const label = document.createElement("span");
+        label.className = "sticker-tray-name";
+        label.textContent = s.name;
+        item.appendChild(label);
+        if (s.isNew) {
+          const badge = document.createElement("span");
+          badge.className = "sticker-tray-new-badge";
+          badge.textContent = "NEW";
+          item.appendChild(badge);
+        }
+        if (s.duplicates > 0) {
+          const dup = document.createElement("span");
+          dup.className = "sticker-tray-dup";
+          dup.textContent = "x" + (s.duplicates + 1);
+          item.appendChild(dup);
+        }
+        this._bindStickerDrag(item, s, scene);
+        tray.appendChild(item);
+      });
+
+      const hasOwned = ownedUnplaced.length > 0;
+      const allPlaced = progress.placed >= progress.total;
+      if (emptyHint) emptyHint.classList.toggle("hidden", hasOwned || allPlaced);
+      if (trayHint) {
+        if (allPlaced) {
+          trayHint.textContent = "Room complete!";
+          trayHint.classList.add("sticker-tray-hint--complete");
+        } else if (hasOwned) {
+          trayHint.textContent = "Drag a sticker to its glowing spot";
+          trayHint.classList.remove("sticker-tray-hint--complete");
+        } else {
+          trayHint.textContent = "Open packs to unlock more stickers";
+          trayHint.classList.remove("sticker-tray-hint--complete");
         }
       }
+      scene.classList.toggle("sticker-room-scene--complete", allPlaced);
+    }
+
+    _bindStickerDrag(itemEl, sticker, sceneEl) {
+      const self = this;
+      itemEl.style.touchAction = "none";
+      itemEl.onpointerdown = (e) => {
+        e.preventDefault();
+        if (itemEl.dataset.dragging === "1") return;
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const glyph = itemEl.querySelector(".sticker-tray-glyph");
+        const ghost = document.createElement("div");
+        ghost.className = "sticker-drag-ghost";
+        ghost.textContent = (glyph && glyph.textContent) || sticker.emoji || "✨";
+        document.body.appendChild(ghost);
+        const place = (x, y) => {
+          ghost.style.left = x + "px";
+          ghost.style.top = y + "px";
+        };
+        place(startX, startY);
+        itemEl.dataset.dragging = "1";
+        itemEl.classList.add("sticker-tray-item--dragging");
+
+        try { itemEl.setPointerCapture(e.pointerId); } catch (_) {}
+
+        const targetSlot = document.querySelector('#sticker-room-slots .sticker-slot[data-sticker-id="' + sticker.id + '"]');
+        if (targetSlot) targetSlot.classList.add("sticker-slot--hot");
+
+        const onMove = (mv) => {
+          place(mv.clientX, mv.clientY);
+          const hovered = document.elementFromPoint(mv.clientX, mv.clientY);
+          const slotHover = hovered && hovered.closest && hovered.closest(".sticker-slot");
+          document.querySelectorAll(".sticker-slot--hover").forEach((el) => el.classList.remove("sticker-slot--hover"));
+          if (slotHover) slotHover.classList.add("sticker-slot--hover");
+        };
+        const cleanup = () => {
+          itemEl.onpointermove = null;
+          itemEl.onpointerup = null;
+          itemEl.onpointercancel = null;
+          itemEl.classList.remove("sticker-tray-item--dragging");
+          delete itemEl.dataset.dragging;
+          if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+          document.querySelectorAll(".sticker-slot--hover").forEach((el) => el.classList.remove("sticker-slot--hover"));
+          document.querySelectorAll(".sticker-slot--hot").forEach((el) => el.classList.remove("sticker-slot--hot"));
+          try { itemEl.releasePointerCapture(e.pointerId); } catch (_) {}
+        };
+        const onUp = (up) => {
+          const hovered = document.elementFromPoint(up.clientX, up.clientY);
+          const slotHit = hovered && hovered.closest && hovered.closest(".sticker-slot");
+          const matched = slotHit && slotHit.dataset.stickerId === sticker.id && !slotHit.classList.contains("sticker-slot--filled");
+          cleanup();
+          if (matched) {
+            self._onStickerPlaced(sticker.id);
+          } else {
+            // bounce back
+            itemEl.classList.add("sticker-tray-item--bounce");
+            setTimeout(() => itemEl.classList.remove("sticker-tray-item--bounce"), 320);
+          }
+        };
+        itemEl.onpointermove = onMove;
+        itemEl.onpointerup = onUp;
+        itemEl.onpointercancel = (cv) => {
+          cleanup();
+          // treat cancel like an incorrect drop
+          itemEl.classList.add("sticker-tray-item--bounce");
+          setTimeout(() => itemEl.classList.remove("sticker-tray-item--bounce"), 320);
+        };
+      };
+    }
+
+    _onStickerPlaced(stickerId) {
+      const result = this.cm.placeSticker(stickerId);
+      if (!result) return;
+      const def = CARD_DEFS[stickerId];
+      const albumId = def && def.albumId;
+      this._renderStickerRoom(albumId);
+      this.updateGlobalCardsProgress();
+      this.updateAlbumStarsUI();
+      // Flash placement effect on the matching slot.
+      const slot = document.querySelector('#sticker-room-slots .sticker-slot[data-sticker-id="' + stickerId + '"]');
+      if (slot) {
+        slot.classList.add("sticker-slot--just-placed");
+        setTimeout(() => slot.classList.remove("sticker-slot--just-placed"), 700);
+      }
+      if (this.app && this.app.ui) this.app.ui.setCoins(this.cm.getState().coins);
+      if (result.justCompletedRoom && result.reward) {
+        const after = () => {
+          this.updateCollectionButtons();
+          if (result.allCardsComplete) this.showFinalRewardModal(() => this.updateCollectionButtons());
+        };
+        this.showReward(result.reward, result.albumId, after);
+      } else if (result.allCardsComplete) {
+        this.showFinalRewardModal(() => this.updateCollectionButtons());
+      }
+      this.updateCollectionButtons();
     }
 
     _updateAlbumProgress(albumId) {
@@ -2204,28 +3315,12 @@
     }
 
     updateGlobalCardsProgress() {
-      const total = getTotalCardsAvailable();
-      const collected = this.cm.getCollectedTotal(true);
-      const pct = total > 0 ? Math.min(100, (collected / total) * 100) : 0;
-      const isComplete = total > 0 && collected >= total;
-
-      const textEl = document.getElementById("cards-progress-text");
-      if (textEl) textEl.textContent = collected + " / " + total;
-      const textHomeEl = document.getElementById("cards-progress-text-home");
-      if (textHomeEl) textHomeEl.textContent = collected + "/" + total;
-      const fillHomeEl = document.getElementById("cards-progress-fill-home");
-      if (fillHomeEl) fillHomeEl.style.width = pct + "%";
-
-      if (isComplete && this.app && this.app._save) {
-        this.app._save.bonusLevelUnlocked = true;
-        saveSave(this.app._save);
-      }
-
+      // The new "Stickers" feature is a direct playable level rather than a
+      // multi-album collection, so the legacy home progress widget is hidden.
+      // The underlying card data still drives pack openings via Battle Pass,
+      // Wheel, and Star Chests, but its progress is no longer surfaced here.
       const homeWidget = document.getElementById("cards-progress-widget-home");
-      if (homeWidget) {
-        if (this.cm.isAvailable()) homeWidget.classList.remove("hidden");
-        else homeWidget.classList.add("hidden");
-      }
+      if (homeWidget) homeWidget.classList.add("hidden");
     }
 
     showFinalRewardModal(onClose) {
@@ -2478,8 +3573,8 @@
         btn.classList.toggle("locked", !available);
         btn.classList.toggle("event-ended", unlocked && !albumActive);
         btn.setAttribute("aria-disabled", available ? "false" : "true");
-        btn.title = available ? "Collection" : (unlocked && !albumActive ? "Event ended" : "Unlocks after Level 2");
-        btn.setAttribute("aria-label", available ? "Collection" : (unlocked && !albumActive ? "Event ended" : "Unlocks after Level 2"));
+        btn.title = available ? "Sticker Rooms" : (unlocked && !albumActive ? "Event ended" : "Unlocks after Level 2");
+        btn.setAttribute("aria-label", available ? "Sticker Rooms" : (unlocked && !albumActive ? "Event ended" : "Unlocks after Level 2"));
         const badge = btn.querySelector(".nav-badge") || btn.querySelector(".collection-badge");
         if (badge) {
           if (available && hasNew) badge.classList.remove("hidden");
@@ -3337,6 +4432,7 @@
       }
       document.body.classList.toggle("level-active", id === "game-screen");
       document.body.classList.toggle("gallery-screen-active", galleryActive);
+      document.body.classList.toggle("shop-screen-active", id === "shop-screen");
       const stripStart = document.getElementById("status-strip-start");
       const stripGame = document.getElementById("status-strip-game");
       if (stripStart) stripStart.classList.add("hidden");
@@ -3345,7 +4441,7 @@
       if (id === "game-screen" && externalLevelActive && stripStart) stripStart.classList.remove("hidden");
       if (id === "game-screen" && !externalLevelActive && stripGame) stripGame.classList.remove("hidden");
       document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
-      const navMap = { "start-screen": "nav-home", "gallery-screen": "nav-game", "album-screen": "nav-collection" };
+      const navMap = { "start-screen": "nav-home", "gallery-screen": "nav-game", "album-screen": "nav-collection", "shop-screen": "nav-shop" };
       const navId = navMap[id];
       if (navId) {
         const navEl = document.getElementById(navId);
@@ -3391,12 +4487,32 @@
       if (this.progressTextEl) this.progressTextEl.textContent = `Pieces placed ${placed} / ${total}`;
     }
 
-    showWinModal(stars, timeSec, mistakes, onNext, onReplay) {
+    showWinModal(stars, timeSec, mistakes, onNext, onReplay, packTier) {
       this.winModal.classList.remove("hidden");
       this.winStars.querySelectorAll(".star").forEach((s, i) => {
         s.classList.toggle("earned", i < stars);
       });
       this.winStats.textContent = `Time: ${timeSec}s • Mistakes: ${mistakes}`;
+      // Sticker-pack reward (Grade 2 or 3) earned for completing the level.
+      const rewardEl = document.getElementById("win-pack-reward");
+      if (rewardEl) {
+        if (packTier) {
+          const meta = getStickerPackTier(packTier);
+          const amount = meta.min === meta.max ? String(meta.min) : (meta.min + "–" + meta.max);
+          rewardEl.className = "win-pack-reward sticker-pack-tier--" + packTier;
+          rewardEl.innerHTML =
+            '<span class="win-pack-reward-head">🎁 You earned a reward!</span>' +
+            '<span class="win-pack-art" aria-hidden="true">' +
+              '<span class="win-pack-band"></span>' +
+              '<span class="win-pack-star">' + meta.star + '</span>' +
+            '</span>' +
+            '<span class="win-pack-name">' + stickerPackRewardLabel(packTier) + '</span>' +
+            '<span class="win-pack-amount">' + amount + ' stickers · open it in the Stickers tab</span>';
+        } else {
+          rewardEl.className = "win-pack-reward hidden";
+          rewardEl.innerHTML = "";
+        }
+      }
       document.getElementById("btn-next-level").onclick = onNext;
       document.getElementById("btn-replay").onclick = onReplay;
     }
@@ -3451,37 +4567,113 @@
   /* ===================================================================
      Moon Observatory Event Manager
      =================================================================== */
+  // Themed isometric room shells for the Moon Observatory Event — one per
+  // level so every level looks like a different room. Empty shells (walls +
+  // floor + theme accents only); the themed stickers are placed by the player
+  // into HIDDEN targets (no silhouettes drawn).
+  const RC_ROOM_SHELLS = {
+    observatory: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#1a1440"/><polygon points="160,190 290,245 290,159 160,104" fill="#332a63" /><polygon points="160,190 30,245 30,159 160,104" fill="#2b2356" /><circle cx="199.0" cy="154.9" r="1.6" fill="#ffffff" opacity="0.8"/><circle cx="121.0" cy="154.9" r="1.4" fill="#ffffff" opacity="0.7"/><circle cx="238.0" cy="188.6" r="1.6" fill="#ffffff" opacity="0.8"/><circle cx="82.0" cy="188.6" r="1.4" fill="#ffffff" opacity="0.7"/><circle cx="218.5" cy="150.25" r="1.6" fill="#ffffff" opacity="0.8"/><circle cx="101.5" cy="150.25" r="1.4" fill="#ffffff" opacity="0.7"/><circle cx="251.0" cy="172.6" r="1.6" fill="#ffffff" opacity="0.8"/><circle cx="69.0" cy="172.6" r="1.4" fill="#ffffff" opacity="0.7"/><circle cx="192.5" cy="169.35" r="1.6" fill="#ffffff" opacity="0.8"/><circle cx="127.5" cy="169.35" r="1.4" fill="#ffffff" opacity="0.7"/><circle cx="231.5" cy="166.93" r="13" fill="#cdbcf0" /><polygon points="160,104 290,159 290,154 160,99" fill="#8a6bff" /><polygon points="160,104 30,159 30,154 160,99" fill="#8a6bff" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#352b66" /><line x1="192.5" y1="203.75" x2="62.5" y2="258.75" stroke="#6a55b0" stroke-width="1" stroke-opacity="0.4"/><line x1="127.5" y1="203.75" x2="257.5" y2="258.75" stroke="#6a55b0" stroke-width="1" stroke-opacity="0.4"/><line x1="225.0" y1="217.5" x2="95.0" y2="272.5" stroke="#6a55b0" stroke-width="1" stroke-opacity="0.4"/><line x1="95.0" y1="217.5" x2="225.0" y2="272.5" stroke="#6a55b0" stroke-width="1" stroke-opacity="0.4"/><line x1="257.5" y1="231.25" x2="127.5" y2="286.25" stroke="#6a55b0" stroke-width="1" stroke-opacity="0.4"/><line x1="62.5" y1="231.25" x2="192.5" y2="286.25" stroke="#6a55b0" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#8a6bff" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    cafe: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#f7efdf"/><polygon points="160,190 290,245 290,159 160,104" fill="#f4e6c8" /><polygon points="160,190 30,245 30,159 160,104" fill="#efdcb8" /><polygon points="199.0,167.8 240.6,157.01999999999998 240.6,179.01999999999998 199.0,189.8" fill="#bfe3f2" stroke="#fff" stroke-width="2"/><polygon points="160,104 290,159 290,154 160,99" fill="#d99a5c" /><polygon points="160,104 30,159 30,154 160,99" fill="#d99a5c" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#f0c98f" /><line x1="186.0" y1="201.0" x2="56.0" y2="256.0" stroke="#dca868" stroke-width="1" stroke-opacity="0.4"/><line x1="212.0" y1="212.0" x2="82.0" y2="267.0" stroke="#dca868" stroke-width="1" stroke-opacity="0.4"/><line x1="238.0" y1="223.0" x2="108.0" y2="278.0" stroke="#dca868" stroke-width="1" stroke-opacity="0.4"/><line x1="264.0" y1="234.0" x2="134.0" y2="289.0" stroke="#dca868" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#d99a5c" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    hotel: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#f2ece0"/><polygon points="160,190 290,245 290,159 160,104" fill="#e3d2bb" /><polygon points="160,190 30,245 30,159 160,104" fill="#d9c7b0" /><line x1="186.0" y1="201.0" x2="186.0" y2="132.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><line x1="134.0" y1="201.0" x2="134.0" y2="132.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><line x1="212.0" y1="212.0" x2="212.0" y2="143.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><line x1="108.0" y1="212.0" x2="108.0" y2="143.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><line x1="238.0" y1="223.0" x2="238.0" y2="154.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><line x1="82.0" y1="223.0" x2="82.0" y2="154.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><line x1="264.0" y1="234.0" x2="264.0" y2="165.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><line x1="56.0" y1="234.0" x2="56.0" y2="165.2" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.5"/><ellipse cx="160" cy="120" rx="10" ry="5" fill="#ffe9a8" opacity="0.8"/><polygon points="160,104 290,159 290,154 160,99" fill="#c8a24a" /><polygon points="160,104 30,159 30,154 160,99" fill="#c8a24a" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#cdbcd6" /><line x1="203.33333333333331" y1="208.33333333333334" x2="73.33333333333331" y2="263.33333333333337" stroke="#b59fc0" stroke-width="1" stroke-opacity="0.4"/><line x1="116.66666666666667" y1="208.33333333333334" x2="246.66666666666669" y2="263.3333333333333" stroke="#b59fc0" stroke-width="1" stroke-opacity="0.4"/><line x1="246.66666666666666" y1="226.66666666666666" x2="116.66666666666666" y2="281.66666666666663" stroke="#b59fc0" stroke-width="1" stroke-opacity="0.4"/><line x1="73.33333333333334" y1="226.66666666666666" x2="203.33333333333334" y2="281.6666666666667" stroke="#b59fc0" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#c8a24a" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    garage: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#e8eaed"/><polygon points="160,190 290,245 290,159 160,104" fill="#c2c7cd" /><polygon points="160,190 30,245 30,159 160,104" fill="#b3b8be" /><line x1="181.66666666666666" y1="199.16666666666666" x2="181.66666666666666" y2="126.06666666666666" stroke="#8b9097" stroke-width="2" stroke-opacity="0.6"/><line x1="203.33333333333331" y1="208.33333333333334" x2="203.33333333333331" y2="135.23333333333335" stroke="#8b9097" stroke-width="2" stroke-opacity="0.6"/><line x1="225.0" y1="217.5" x2="225.0" y2="144.4" stroke="#8b9097" stroke-width="2" stroke-opacity="0.6"/><line x1="246.66666666666666" y1="226.66666666666666" x2="246.66666666666666" y2="153.56666666666666" stroke="#8b9097" stroke-width="2" stroke-opacity="0.6"/><line x1="268.33333333333337" y1="235.83333333333334" x2="268.33333333333337" y2="162.73333333333335" stroke="#8b9097" stroke-width="2" stroke-opacity="0.6"/><circle cx="127.5" cy="182.25" r="1.4" fill="#7d828c"/><circle cx="127.5" cy="160.75" r="1.4" fill="#7d828c"/><circle cx="127.5" cy="139.25" r="1.4" fill="#7d828c"/><circle cx="95.0" cy="196.0" r="1.4" fill="#7d828c"/><circle cx="95.0" cy="174.5" r="1.4" fill="#7d828c"/><circle cx="95.0" cy="153.0" r="1.4" fill="#7d828c"/><circle cx="62.5" cy="209.75" r="1.4" fill="#7d828c"/><circle cx="62.5" cy="188.25" r="1.4" fill="#7d828c"/><circle cx="62.5" cy="166.75" r="1.4" fill="#7d828c"/><polygon points="160,104 290,159 290,154 160,99" fill="#e0533f" /><polygon points="160,104 30,159 30,154 160,99" fill="#e0533f" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#cbced3" /><line x1="192.5" y1="203.75" x2="62.5" y2="258.75" stroke="#a7abb2" stroke-width="1" stroke-opacity="0.4"/><line x1="127.5" y1="203.75" x2="257.5" y2="258.75" stroke="#a7abb2" stroke-width="1" stroke-opacity="0.4"/><line x1="225.0" y1="217.5" x2="95.0" y2="272.5" stroke="#a7abb2" stroke-width="1" stroke-opacity="0.4"/><line x1="95.0" y1="217.5" x2="225.0" y2="272.5" stroke="#a7abb2" stroke-width="1" stroke-opacity="0.4"/><line x1="257.5" y1="231.25" x2="127.5" y2="286.25" stroke="#a7abb2" stroke-width="1" stroke-opacity="0.4"/><line x1="62.5" y1="231.25" x2="192.5" y2="286.25" stroke="#a7abb2" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#e0533f" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    library: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#efe2cf"/><polygon points="160,190 290,245 290,159 160,104" fill="#c79a66" /><polygon points="160,190 30,245 30,159 160,104" fill="#b88a5a" /><line x1="144.4" y1="175.1" x2="49.5" y2="215.25" stroke="#7a5230" stroke-width="1.5" stroke-opacity="1"/><polygon points="139.2,175.58 145.2,177.98000000000002 145.2,166.58 139.2,164.58" fill="#c97a6a" /><polygon points="124.9,181.63 130.9,184.03 130.9,172.63 124.9,170.63" fill="#7a9ec9" /><polygon points="110.6,187.68 116.6,190.08 116.6,178.68 110.6,176.68" fill="#caa86a" /><polygon points="96.30000000000001,193.73 102.30000000000001,196.13 102.30000000000001,184.73 96.30000000000001,182.73" fill="#7ac98f" /><polygon points="82.0,199.78 88.0,202.18 88.0,190.78 82.0,188.78" fill="#b07ac9" /><polygon points="67.69999999999999,205.83 73.69999999999999,208.23000000000002 73.69999999999999,196.83 67.69999999999999,194.83" fill="#c97a6a" /><line x1="144.4" y1="156.18" x2="49.5" y2="196.33" stroke="#7a5230" stroke-width="1.5" stroke-opacity="1"/><polygon points="139.2,156.66000000000003 145.2,159.06000000000003 145.2,147.66000000000003 139.2,145.66000000000003" fill="#c97a6a" /><polygon points="124.9,162.70999999999998 130.9,165.10999999999999 130.9,153.70999999999998 124.9,151.70999999999998" fill="#7a9ec9" /><polygon points="110.6,168.76 116.6,171.16 116.6,159.76 110.6,157.76" fill="#caa86a" /><polygon points="96.30000000000001,174.81 102.30000000000001,177.21 102.30000000000001,165.81 96.30000000000001,163.81" fill="#7ac98f" /><polygon points="82.0,180.86 88.0,183.26000000000002 88.0,171.86 82.0,169.86" fill="#b07ac9" /><polygon points="67.69999999999999,186.91000000000003 73.69999999999999,189.31000000000003 73.69999999999999,177.91000000000003 67.69999999999999,175.91000000000003" fill="#c97a6a" /><line x1="144.4" y1="137.26" x2="49.5" y2="177.41" stroke="#7a5230" stroke-width="1.5" stroke-opacity="1"/><polygon points="139.2,137.74 145.2,140.14000000000001 145.2,128.74 139.2,126.74000000000001" fill="#c97a6a" /><polygon points="124.9,143.79 130.9,146.19 130.9,134.79 124.9,132.79" fill="#7a9ec9" /><polygon points="110.6,149.84 116.6,152.24 116.6,140.84 110.6,138.84" fill="#caa86a" /><polygon points="96.30000000000001,155.89 102.30000000000001,158.29 102.30000000000001,146.89 96.30000000000001,144.89" fill="#7ac98f" /><polygon points="82.0,161.94 88.0,164.34 88.0,152.94 82.0,150.94" fill="#b07ac9" /><polygon points="67.69999999999999,167.99 73.69999999999999,170.39000000000001 73.69999999999999,158.99 67.69999999999999,156.99" fill="#c97a6a" /><polygon points="160,104 290,159 290,154 160,99" fill="#8a5a2a" /><polygon points="160,104 30,159 30,154 160,99" fill="#8a5a2a" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#caa06a" /><line x1="186.0" y1="201.0" x2="56.0" y2="256.0" stroke="#a87f4e" stroke-width="1" stroke-opacity="0.4"/><line x1="212.0" y1="212.0" x2="82.0" y2="267.0" stroke="#a87f4e" stroke-width="1" stroke-opacity="0.4"/><line x1="238.0" y1="223.0" x2="108.0" y2="278.0" stroke="#a87f4e" stroke-width="1" stroke-opacity="0.4"/><line x1="264.0" y1="234.0" x2="134.0" y2="289.0" stroke="#a87f4e" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#8a5a2a" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    greenhouse: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#e6f2ec"/><polygon points="160,190 290,245 290,159 160,104" fill="#d9ece5" /><polygon points="160,190 30,245 30,159 160,104" fill="#cfe6df" /><line x1="186.0" y1="201.0" x2="186.0" y2="127.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="134.0" y1="201.0" x2="134.0" y2="127.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="212.0" y1="212.0" x2="212.0" y2="138.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="108.0" y1="212.0" x2="108.0" y2="138.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="238.0" y1="223.0" x2="238.0" y2="149.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="82.0" y1="223.0" x2="82.0" y2="149.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="264.0" y1="234.0" x2="264.0" y2="160.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="56.0" y1="234.0" x2="56.0" y2="160.9" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="160" y1="155.6" x2="290" y2="210.6" stroke="#ffffff" stroke-width="1" stroke-opacity="0.4"/><line x1="160" y1="155.6" x2="30" y2="210.6" stroke="#ffffff" stroke-width="1" stroke-opacity="0.4"/><line x1="160" y1="129.8" x2="290" y2="184.8" stroke="#ffffff" stroke-width="1" stroke-opacity="0.4"/><line x1="160" y1="129.8" x2="30" y2="184.8" stroke="#ffffff" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,104 290,159 290,154 160,99" fill="#6fae54" /><polygon points="160,104 30,159 30,154 160,99" fill="#6fae54" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#c2d3a8" /><line x1="192.5" y1="203.75" x2="62.5" y2="258.75" stroke="#a8bf8a" stroke-width="1" stroke-opacity="0.4"/><line x1="127.5" y1="203.75" x2="257.5" y2="258.75" stroke="#a8bf8a" stroke-width="1" stroke-opacity="0.4"/><line x1="225.0" y1="217.5" x2="95.0" y2="272.5" stroke="#a8bf8a" stroke-width="1" stroke-opacity="0.4"/><line x1="95.0" y1="217.5" x2="225.0" y2="272.5" stroke="#a8bf8a" stroke-width="1" stroke-opacity="0.4"/><line x1="257.5" y1="231.25" x2="127.5" y2="286.25" stroke="#a8bf8a" stroke-width="1" stroke-opacity="0.4"/><line x1="62.5" y1="231.25" x2="192.5" y2="286.25" stroke="#a8bf8a" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#6fae54" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    kitchen: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#fbeef4"/><polygon points="160,190 290,245 290,159 160,104" fill="#f8ecf2" /><polygon points="160,190 30,245 30,159 160,104" fill="#f4e0ea" /><rect x="157.0" y="183.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="157.0" y="161.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="157.0" y="140.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="157.0" y="118.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="183.0" y="194.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="183.0" y="172.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="183.0" y="151.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="183.0" y="129.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="209.0" y="205.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="209.0" y="183.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="209.0" y="162.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="209.0" y="140.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="235.0" y="216.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="235.0" y="194.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="235.0" y="173.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="235.0" y="151.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="261.0" y="227.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="261.0" y="205.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="261.0" y="184.0" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><rect x="261.0" y="162.5" width="7" height="8" fill="none" stroke="#e3c0cf" stroke-width="0.8"/><polygon points="160,104 290,159 290,154 160,99" fill="#e3a0ba" /><polygon points="160,104 30,159 30,154 160,99" fill="#e3a0ba" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#f3d7e1" /><polygon points="160.0,190.0 192.5,203.75 160.0,217.5 127.5,203.75" fill="#e1bfd0" opacity="0.5"/><polygon points="95.0,217.5 127.5,231.25 95.0,245.0 62.5,231.25" fill="#e1bfd0" opacity="0.5"/><polygon points="160.0,217.5 192.5,231.25 160.0,245.0 127.5,231.25" fill="#e1bfd0" opacity="0.5"/><polygon points="95.0,245.0 127.5,258.75 95.0,272.5 62.5,258.75" fill="#e1bfd0" opacity="0.5"/><polygon points="225.0,217.5 257.5,231.25 225.0,245.0 192.5,231.25" fill="#e1bfd0" opacity="0.5"/><polygon points="160.0,245.0 192.5,258.75 160.0,272.5 127.5,258.75" fill="#e1bfd0" opacity="0.5"/><polygon points="225.0,245.0 257.5,258.75 225.0,272.5 192.5,258.75" fill="#e1bfd0" opacity="0.5"/><polygon points="160.0,272.5 192.5,286.25 160.0,300.0 127.5,286.25" fill="#e1bfd0" opacity="0.5"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#e3a0ba" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    artstudio: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#fdf4e8"/><polygon points="160,190 290,245 290,159 160,104" fill="#fdf2e6" /><polygon points="160,190 30,245 30,159 160,104" fill="#f7ead8" /><ellipse cx="199.0" cy="154.9" rx="6" ry="4" fill="#ff7aa0" opacity="0.7"/><ellipse cx="121.0" cy="154.9" rx="5" ry="3.5" fill="#ffd16b" opacity="0.7"/><ellipse cx="238.0" cy="184.3" rx="6" ry="4" fill="#7ac9e0" opacity="0.7"/><ellipse cx="82.0" cy="184.3" rx="5" ry="3.5" fill="#8fd17a" opacity="0.7"/><ellipse cx="218.5" cy="150.25" rx="6" ry="4" fill="#ffd16b" opacity="0.7"/><ellipse cx="101.5" cy="150.25" rx="5" ry="3.5" fill="#b07ae0" opacity="0.7"/><ellipse cx="251.0" cy="176.9" rx="6" ry="4" fill="#8fd17a" opacity="0.7"/><ellipse cx="69.0" cy="176.9" rx="5" ry="3.5" fill="#ff7aa0" opacity="0.7"/><ellipse cx="192.5" cy="165.05" rx="6" ry="4" fill="#b07ae0" opacity="0.7"/><ellipse cx="127.5" cy="165.05" rx="5" ry="3.5" fill="#7ac9e0" opacity="0.7"/><polygon points="160,104 290,159 290,154 160,99" fill="#ff7aa0" /><polygon points="160,104 30,159 30,154 160,99" fill="#ff7aa0" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#efe7d0" /><line x1="186.0" y1="201.0" x2="56.0" y2="256.0" stroke="#dcc9aa" stroke-width="1" stroke-opacity="0.4"/><line x1="212.0" y1="212.0" x2="82.0" y2="267.0" stroke="#dcc9aa" stroke-width="1" stroke-opacity="0.4"/><line x1="238.0" y1="223.0" x2="108.0" y2="278.0" stroke="#dcc9aa" stroke-width="1" stroke-opacity="0.4"/><line x1="264.0" y1="234.0" x2="134.0" y2="289.0" stroke="#dcc9aa" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#ff7aa0" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+    rooftop: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#161033"/><polygon points="160,190 290,245 160,300 30,245" fill="#3a3056" /><line x1="186.0" y1="201.0" x2="56.0" y2="256.0" stroke="#2c2348" stroke-width="1" stroke-opacity="0.4"/><line x1="212.0" y1="212.0" x2="82.0" y2="267.0" stroke="#2c2348" stroke-width="1" stroke-opacity="0.4"/><line x1="238.0" y1="223.0" x2="108.0" y2="278.0" stroke="#2c2348" stroke-width="1" stroke-opacity="0.4"/><line x1="264.0" y1="234.0" x2="134.0" y2="289.0" stroke="#2c2348" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#6a5e8a" stroke-width="1" stroke-opacity="0.35"/><line x1="160.0" y1="190.0" x2="160.0" y2="164.0" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="160.0" y1="190.0" x2="160.0" y2="164.0" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="181.66666666666666" y1="199.16666666666666" x2="181.66666666666666" y2="173.16666666666666" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="138.33333333333334" y1="199.16666666666666" x2="138.33333333333334" y2="173.16666666666666" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="203.33333333333331" y1="208.33333333333334" x2="203.33333333333331" y2="182.33333333333334" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="116.66666666666667" y1="208.33333333333334" x2="116.66666666666667" y2="182.33333333333334" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="225.0" y1="217.5" x2="225.0" y2="191.5" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="95.0" y1="217.5" x2="95.0" y2="191.5" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="246.66666666666666" y1="226.66666666666666" x2="246.66666666666666" y2="200.66666666666666" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="73.33333333333334" y1="226.66666666666666" x2="73.33333333333334" y2="200.66666666666666" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="268.33333333333337" y1="235.83333333333334" x2="268.33333333333337" y2="209.83333333333334" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="51.66666666666666" y1="235.83333333333334" x2="51.66666666666666" y2="209.83333333333334" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="290.0" y1="245.0" x2="290.0" y2="219.0" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="30.0" y1="245.0" x2="30.0" y2="219.0" stroke="#5a4e7a" stroke-width="2" stroke-opacity="0.9"/><line x1="160" y1="164" x2="290" y2="219" stroke="#6a5e8a" stroke-width="2" stroke-opacity="0.9"/><line x1="160" y1="164" x2="30" y2="219" stroke="#6a5e8a" stroke-width="2" stroke-opacity="0.9"/><circle cx="70" cy="60" r="1.6" fill="#fff" opacity="0.8"/><circle cx="120" cy="40" r="1.6" fill="#fff" opacity="0.8"/><circle cx="200" cy="55" r="1.6" fill="#fff" opacity="0.8"/><circle cx="250" cy="80" r="1.6" fill="#fff" opacity="0.8"/><circle cx="160" cy="30" r="1.6" fill="#fff" opacity="0.8"/><circle cx="100" cy="90" r="1.6" fill="#fff" opacity="0.8"/><circle cx="230" cy="45" r="1.6" fill="#fff" opacity="0.8"/><circle cx="240" cy="60" r="14" fill="#e9e0ff" opacity="0.9"/></svg>`,
+    tech: `<svg class="rc-shell-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><rect x="0" y="0" width="320" height="360" fill="#0c1326"/><polygon points="160,190 290,245 290,159 160,104" fill="#2a3450" /><polygon points="160,190 30,245 30,159 160,104" fill="#222b40" /><line x1="166.5" y1="166.95" x2="283.5" y2="216.45" stroke="#00d4ff" stroke-width="1.5" stroke-opacity="0.7"/><line x1="153.5" y1="166.95" x2="36.5" y2="216.45" stroke="#00d4ff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="166.5" y1="149.75" x2="283.5" y2="199.25" stroke="#00d4ff" stroke-width="1.5" stroke-opacity="0.7"/><line x1="153.5" y1="149.75" x2="36.5" y2="199.25" stroke="#00d4ff" stroke-width="1.5" stroke-opacity="0.5"/><line x1="166.5" y1="132.55" x2="283.5" y2="182.05" stroke="#00d4ff" stroke-width="1.5" stroke-opacity="0.7"/><line x1="153.5" y1="132.55" x2="36.5" y2="182.05" stroke="#00d4ff" stroke-width="1.5" stroke-opacity="0.5"/><polygon points="192.5,177.95 257.5,162.45 257.5,180.45 192.5,195.95" fill="#0a3a5c" stroke="#00d4ff" stroke-width="1.5"/><polygon points="160,104 290,159 290,154 160,99" fill="#00d4ff" /><polygon points="160,104 30,159 30,154 160,99" fill="#00d4ff" /><line x1="160" y1="104" x2="160" y2="190" stroke="#0000001a" stroke-width="1.5" stroke-opacity="1"/><polygon points="160,190 290,245 160,300 30,245" fill="#1b2438" /><line x1="186.0" y1="201.0" x2="56.0" y2="256.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><line x1="134.0" y1="201.0" x2="264.0" y2="256.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><line x1="212.0" y1="212.0" x2="82.0" y2="267.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><line x1="108.0" y1="212.0" x2="238.0" y2="267.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><line x1="238.0" y1="223.0" x2="108.0" y2="278.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><line x1="82.0" y1="223.0" x2="212.0" y2="278.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><line x1="264.0" y1="234.0" x2="134.0" y2="289.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><line x1="56.0" y1="234.0" x2="186.0" y2="289.0" stroke="#1e6a8c" stroke-width="1" stroke-opacity="0.4"/><polygon points="160,190 290,245 160,300 30,245" fill="none" stroke="#00d4ff" stroke-width="1" stroke-opacity="0.35"/></svg>`,
+  };
+
   class RubyCaveManager {
     static EVENT_TOTAL_LEVELS = 10;
-    static SHAPES = {
-      star:{color:"#ffd639",rich:"#f0a000",bg:"#fef9e7",border:"#f5c518",shadow:"rgba(245,197,24,.34)",svg:`<svg viewBox="0 0 100 100"><polygon points="50,8 61,38 94,38 67,58 78,90 50,70 22,90 33,58 6,38 39,38" fill="FILL"/></svg>`},
-      heart:{color:"#ff5c8a",rich:"#e0245e",bg:"#fde8ee",border:"#f44074",shadow:"rgba(244,64,116,.30)",svg:`<svg viewBox="0 0 100 100"><path d="M50 88 C25 65 5 50 5 33 5 18 17 8 30 8 38 8 46 13 50 20 54 13 62 8 70 8 83 8 95 18 95 33 95 50 75 65 50 88Z" fill="FILL"/></svg>`},
-      moon:{color:"#a47cff",rich:"#6a3de8",bg:"#f0eaff",border:"#8b5cf6",shadow:"rgba(139,92,246,.30)",svg:`<svg viewBox="0 0 100 100"><path d="M70 66 A30 30 0 1 1 34 30 A24 24 0 1 0 70 66Z" fill="FILL"/></svg>`},
-      diamond:{color:"#4fc3f7",rich:"#0288d1",bg:"#e4f4fd",border:"#29b6f6",shadow:"rgba(41,182,246,.30)",svg:`<svg viewBox="0 0 100 100"><polygon points="50,5 90,50 50,95 10,50" fill="FILL"/></svg>`},
-      tree:{color:"#66d97f",rich:"#2e8b47",bg:"#e6f7ec",border:"#4caf50",shadow:"rgba(76,175,80,.30)",svg:`<svg viewBox="0 0 100 100"><polygon points="50,6 80,45 66,45 85,75 15,75 34,45 20,45" fill="FILL"/><rect x="42" y="75" width="16" height="20" rx="2" fill="FILL"/></svg>`},
-      bolt:{color:"#ffb74d",rich:"#ef6c00",bg:"#fff2e4",border:"#ffa726",shadow:"rgba(255,167,38,.30)",svg:`<svg viewBox="0 0 100 100"><polygon points="57,6 28,52 48,52 36,94 73,42 51,42" fill="FILL"/></svg>`},
-      clover:{color:"#7ed957",rich:"#388e3c",bg:"#ebf8e5",border:"#66bb6a",shadow:"rgba(102,187,106,.30)",svg:`<svg viewBox="0 0 100 100"><circle cx="38" cy="34" r="17" fill="FILL"/><circle cx="62" cy="34" r="17" fill="FILL"/><circle cx="38" cy="58" r="17" fill="FILL"/><circle cx="62" cy="58" r="17" fill="FILL"/><rect x="47" y="71" width="6" height="20" rx="2" fill="FILL"/></svg>`}
-    };
-    static LEVELS = [
-      {slots:[{shape:"star",x:23,y:28,size:19},{shape:"heart",x:75,y:30,size:19},{shape:"diamond",x:33,y:67,size:19},{shape:"tree",x:67,y:67,size:19}],tray:["tree","star","diamond","heart"]},
-      {slots:[{shape:"moon",x:21,y:27,size:18},{shape:"diamond",x:77,y:28,size:18},{shape:"heart",x:29,y:69,size:18},{shape:"star",x:71,y:68,size:18}],tray:["heart","moon","star","diamond"]},
-      {slots:[{shape:"tree",x:18,y:24,size:17},{shape:"bolt",x:50,y:22,size:17},{shape:"heart",x:82,y:26,size:17},{shape:"moon",x:30,y:66,size:17},{shape:"diamond",x:70,y:66,size:17}],tray:["heart","tree","moon","diamond","bolt"]},
-      {slots:[{shape:"clover",x:22,y:30,size:16.5},{shape:"star",x:50,y:24,size:16.5},{shape:"diamond",x:78,y:30,size:16.5},{shape:"moon",x:32,y:68,size:16.5},{shape:"tree",x:68,y:68,size:16.5}],tray:["moon","tree","clover","star","diamond"]},
-      {slots:[{shape:"star",x:18,y:24,size:15.5},{shape:"heart",x:50,y:22,size:15.5},{shape:"moon",x:82,y:25,size:15.5},{shape:"diamond",x:20,y:65,size:15.5},{shape:"tree",x:50,y:68,size:15.5},{shape:"bolt",x:80,y:64,size:15.5}],tray:["moon","bolt","star","tree","heart","diamond"]},
-      {slots:[{shape:"clover",x:16,y:28,size:15},{shape:"tree",x:42,y:24,size:15},{shape:"diamond",x:76,y:26,size:15},{shape:"bolt",x:23,y:66,size:15},{shape:"heart",x:56,y:66,size:15},{shape:"moon",x:84,y:67,size:15}],tray:["diamond","heart","clover","moon","tree","bolt"]},
-      {slots:[{shape:"star",x:14,y:24,size:14.2},{shape:"heart",x:33,y:22,size:14.2},{shape:"moon",x:52,y:24,size:14.2},{shape:"diamond",x:72,y:22,size:14.2},{shape:"tree",x:88,y:26,size:14.2},{shape:"bolt",x:30,y:67,size:14.2},{shape:"clover",x:68,y:67,size:14.2}],tray:["clover","star","diamond","heart","tree","bolt","moon"]},
-      {slots:[{shape:"star",x:22,y:20,size:13.8},{shape:"heart",x:50,y:19,size:13.8},{shape:"diamond",x:78,y:20,size:13.8},{shape:"moon",x:16,y:48,size:13.8},{shape:"bolt",x:50,y:48,size:13.8},{shape:"tree",x:84,y:48,size:13.8},{shape:"clover",x:50,y:77,size:13.8}],tray:["moon","star","tree","heart","clover","bolt","diamond"]},
-      {slots:[{shape:"heart",x:13,y:23,size:13.4},{shape:"moon",x:31,y:24,size:13.4},{shape:"diamond",x:50,y:22,size:13.4},{shape:"bolt",x:69,y:24,size:13.4},{shape:"star",x:87,y:22,size:13.4},{shape:"tree",x:31,y:69,size:13.4},{shape:"clover",x:69,y:69,size:13.4}],tray:["bolt","heart","clover","moon","tree","diamond","star"]},
-      {slots:[{shape:"star",x:14,y:20,size:13},{shape:"heart",x:33,y:18,size:13},{shape:"moon",x:50,y:22,size:13},{shape:"diamond",x:67,y:18,size:13},{shape:"tree",x:86,y:20,size:13},{shape:"bolt",x:33,y:69,size:13},{shape:"clover",x:67,y:69,size:13}],tray:["tree","heart","bolt","diamond","star","clover","moon"]}
+    // Each Moon Observatory event level is an isometric sticker room. The player
+    // drags observatory-themed stickers from the bottom tray to their correct
+    // HIDDEN target position in the room (no silhouette is drawn). x/y are
+    // normalized 0..1 inside the room (x = left→right, y = back/top→front/bottom);
+    // surface is purely cosmetic (floor | leftWall | rightWall | decor). Sticker
+    // ids are unique per level and link a tray tile to its one hidden target.
+    static STICKER_LEVELS = [
+      { theme: "Dark Observatory", room: "observatory", stickers: [
+        { id: "telescope", name: "Telescope", emoji: "🔭", x: 0.5, y: 0.7, surface: "floor" },
+        { id: "moon", name: "Moon", emoji: "🌙", x: 0.5, y: 0.3, surface: "decor" },
+        { id: "crystal", name: "Crystal", emoji: "🔮", x: 0.3, y: 0.74, surface: "floor" },
+        { id: "candle", name: "Candle", emoji: "🕯️", x: 0.7, y: 0.72, surface: "floor" },
+      ]},
+      { theme: "Cozy Cafe", room: "cafe", stickers: [
+        { id: "coffee", name: "Coffee Machine", emoji: "☕", x: 0.46, y: 0.7, surface: "floor" },
+        { id: "cake", name: "Cake", emoji: "🍰", x: 0.64, y: 0.72, surface: "floor" },
+        { id: "chair", name: "Chair", emoji: "🪑", x: 0.28, y: 0.74, surface: "floor" },
+        { id: "teapot", name: "Teapot", emoji: "🫖", x: 0.52, y: 0.8, surface: "floor" },
+      ]},
+      { theme: "Hotel Lobby", room: "hotel", stickers: [
+        { id: "sofa", name: "Sofa", emoji: "🛋️", x: 0.5, y: 0.7, surface: "floor" },
+        { id: "plant", name: "Plant", emoji: "🪴", x: 0.24, y: 0.72, surface: "floor" },
+        { id: "bell", name: "Bell", emoji: "🛎️", x: 0.66, y: 0.66, surface: "floor" },
+        { id: "clock", name: "Clock", emoji: "🕰️", x: 0.62, y: 0.4, surface: "rightWall" },
+        { id: "luggage", name: "Luggage", emoji: "🧳", x: 0.38, y: 0.8, surface: "floor" },
+      ]},
+      { theme: "Garage Workshop", room: "garage", stickers: [
+        { id: "toolbox", name: "Toolbox", emoji: "🧰", x: 0.5, y: 0.72, surface: "floor" },
+        { id: "tire", name: "Tire", emoji: "🛞", x: 0.26, y: 0.74, surface: "floor" },
+        { id: "wrench", name: "Wrench", emoji: "🔧", x: 0.68, y: 0.66, surface: "floor" },
+        { id: "bike", name: "Bike", emoji: "🚲", x: 0.5, y: 0.82, surface: "floor" },
+        { id: "barrel", name: "Barrel", emoji: "🛢️", x: 0.78, y: 0.7, surface: "floor" },
+      ]},
+      { theme: "Library Study", room: "library", stickers: [
+        { id: "books", name: "Books", emoji: "📚", x: 0.3, y: 0.68, surface: "floor" },
+        { id: "armchair", name: "Armchair", emoji: "🛋️", x: 0.62, y: 0.72, surface: "floor" },
+        { id: "lamp", name: "Lamp", emoji: "💡", x: 0.8, y: 0.66, surface: "floor" },
+        { id: "desk", name: "Desk Chair", emoji: "🪑", x: 0.46, y: 0.8, surface: "floor" },
+        { id: "candle", name: "Candle", emoji: "🕯️", x: 0.66, y: 0.62, surface: "floor" },
+        { id: "scroll", name: "Scroll", emoji: "📜", x: 0.22, y: 0.62, surface: "floor" },
+      ]},
+      { theme: "Greenhouse", room: "greenhouse", stickers: [
+        { id: "plant", name: "Potted Plant", emoji: "🪴", x: 0.3, y: 0.7, surface: "floor" },
+        { id: "flower", name: "Flowers", emoji: "🌻", x: 0.66, y: 0.72, surface: "floor" },
+        { id: "bucket", name: "Watering Can", emoji: "🪣", x: 0.5, y: 0.8, surface: "floor" },
+        { id: "herbs", name: "Herbs", emoji: "🌿", x: 0.22, y: 0.74, surface: "floor" },
+        { id: "seedling", name: "Seedling", emoji: "🌱", x: 0.74, y: 0.66, surface: "floor" },
+        { id: "vase", name: "Vase", emoji: "🏺", x: 0.5, y: 0.64, surface: "floor" },
+      ]},
+      { theme: "Kitchen Bakery", room: "kitchen", stickers: [
+        { id: "pan", name: "Stove Pan", emoji: "🍳", x: 0.46, y: 0.7, surface: "floor" },
+        { id: "bread", name: "Bread", emoji: "🥖", x: 0.64, y: 0.72, surface: "floor" },
+        { id: "cake", name: "Cake", emoji: "🍰", x: 0.28, y: 0.74, surface: "floor" },
+        { id: "teapot", name: "Teapot", emoji: "🫖", x: 0.76, y: 0.66, surface: "floor" },
+        { id: "pie", name: "Pie", emoji: "🥧", x: 0.52, y: 0.82, surface: "floor" },
+        { id: "cupcake", name: "Cupcake", emoji: "🧁", x: 0.4, y: 0.62, surface: "floor" },
+      ]},
+      { theme: "Art Studio", room: "artstudio", stickers: [
+        { id: "palette", name: "Palette", emoji: "🎨", x: 0.46, y: 0.7, surface: "floor" },
+        { id: "canvas", name: "Canvas", emoji: "🖼️", x: 0.3, y: 0.64, surface: "floor" },
+        { id: "brush", name: "Brush", emoji: "🖌️", x: 0.66, y: 0.74, surface: "floor" },
+        { id: "stool", name: "Stool", emoji: "🪑", x: 0.58, y: 0.8, surface: "floor" },
+        { id: "vase", name: "Vase", emoji: "🏺", x: 0.8, y: 0.66, surface: "floor" },
+        { id: "pencil", name: "Pencil", emoji: "✏️", x: 0.22, y: 0.72, surface: "floor" },
+        { id: "bucket", name: "Paint", emoji: "🪣", x: 0.5, y: 0.6, surface: "floor" },
+      ]},
+      { theme: "Rooftop Terrace", room: "rooftop", stickers: [
+        { id: "telescope", name: "Telescope", emoji: "🔭", x: 0.52, y: 0.68, surface: "floor" },
+        { id: "lantern", name: "Lantern", emoji: "🪔", x: 0.3, y: 0.72, surface: "floor" },
+        { id: "cushion", name: "Cushion", emoji: "🛋️", x: 0.64, y: 0.74, surface: "floor" },
+        { id: "plant", name: "Plant", emoji: "🪴", x: 0.22, y: 0.74, surface: "floor" },
+        { id: "rug", name: "Moon Rug", emoji: "🟪", x: 0.5, y: 0.82, surface: "floor" },
+        { id: "star", name: "Star", emoji: "⭐", x: 0.74, y: 0.66, surface: "floor" },
+        { id: "candle", name: "Candle", emoji: "🕯️", x: 0.42, y: 0.62, surface: "floor" },
+      ]},
+      { theme: "Tech Penthouse", room: "tech", stickers: [
+        { id: "sofa", name: "Sofa", emoji: "🛋️", x: 0.5, y: 0.7, surface: "floor" },
+        { id: "screen", name: "Screen", emoji: "🖥️", x: 0.3, y: 0.64, surface: "floor" },
+        { id: "robot", name: "Robot", emoji: "🤖", x: 0.7, y: 0.72, surface: "floor" },
+        { id: "light", name: "Light", emoji: "💡", x: 0.82, y: 0.62, surface: "floor" },
+        { id: "chair", name: "Chair", emoji: "🪑", x: 0.4, y: 0.78, surface: "floor" },
+        { id: "plant", name: "Plant", emoji: "🪴", x: 0.22, y: 0.72, surface: "floor" },
+        { id: "panel", name: "Panel", emoji: "🔆", x: 0.6, y: 0.6, surface: "floor" },
+        { id: "orb", name: "Orb", emoji: "🔮", x: 0.52, y: 0.84, surface: "floor" },
+      ]},
     ];
-    static EVENT_LEVELS = [
-      { id: "event_level_1_html", type: "html-playable", src: "levels/PuzzleCity_City2_unity_Full_merged.html" }
-    ];
-    static ENERGY_MAX = 5;
+    static ENERGY_MAX = 25;
     static REGEN_MS = 5 * 60 * 1000;
-    static NODE_POS = [
-      [5,50],[15,50],[25,50],[35,50],[45,50],[55,50],[65,50],[75,50],[85,50],[95,50]
-    ];
 
     constructor(save, saveFn) {
       this._save = save;
@@ -3498,21 +4690,10 @@
       this.nextEnergyAt = save.rubyCaveNextEnergyAt || null;
       this.eventEnd = save.rubyCaveEventEnd;
       this.currentLevel = 0;
-      this.placed = 0;
-      this.slots = [];
-      this.activePiece = null;
-      this.originRect = null;
-      this.offX = 0;
-      this.offY = 0;
+      this.placedCount = 0;
+      this.targetCount = 0;
+      this._activeStickerLevel = 0;
       this._toastTimer = null;
-      this._eventExternalActive = false;
-      this._eventExternalFrameBound = false;
-      this._eventExternalLoadedLevelIndex = -1;
-      this._eventExternalLoadedSrc = "";
-      this._eventExternalSeenPieceIds = new Set();
-      this._eventExternalObserver = null;
-      this._eventExternalLevelDone = false;
-      this._activeInternalLevelIndex = 0;
 
       this._cacheEls();
       this._bindEvents();
@@ -3549,7 +4730,12 @@
         gameInfo: q("rc-gameInfo"),
         nodes: q("rc-nodes"),
         scene: q("rc-scene"),
+        room: q("rc-room"),
+        roomShell: q("rc-room-shell"),
+        roomPlaced: q("rc-room-placed"),
         tray: q("rc-tray"),
+        doneTitle: q("rc-done-title"),
+        donePreview: q("rc-done-preview"),
         externalHost: q("rc-external-host"),
         externalFrame: q("rc-external-frame"),
         grandReward: q("rc-grand-reward"),
@@ -3582,12 +4768,7 @@
         this.el.hubClaim.addEventListener("click", () => this._onHubClaim());
       }
 
-      this._onDown = (e) => this._pointerDown(e);
-      this._onMove = (e) => this._pointerMove(e);
-      this._onUp = () => this._pointerUp();
-      document.addEventListener("pointerdown", this._onDown);
-      document.addEventListener("pointermove", this._onMove);
-      document.addEventListener("pointerup", this._onUp);
+      // Sticker drag is bound per tray tile in _buildLevel (see _bindStickerDrag).
 
       const infoBtn = document.getElementById("rc-infoBtn");
       const gameInfoBtn = document.getElementById("rc-gameInfoBtn");
@@ -3599,8 +4780,6 @@
           if (e.target === this.el.featureInfoOverlay) this._closeFeatureInfo();
         });
       }
-
-      this._bindExternalEventFrame();
     }
 
     _startTimers() {
@@ -3616,10 +4795,6 @@
       this._saveFn();
     }
 
-    _svg(shape, fill) {
-      return RubyCaveManager.SHAPES[shape].svg.replace(/FILL/g, fill);
-    }
-
     _showToast(msg) {
       this.el.toast.textContent = msg;
       this.el.toast.classList.add("rc-show");
@@ -3627,32 +4802,23 @@
       this._toastTimer = setTimeout(() => this.el.toast.classList.remove("rc-show"), 850);
     }
 
-    _eventLevelDefs() {
-      if (this._cachedEventLevelDefs) return this._cachedEventLevelDefs;
-      const defs = RubyCaveManager.EVENT_LEVELS.slice();
-      RubyCaveManager.LEVELS.forEach((_, idx) => {
-        defs.push({
-          id: "event_internal_level_" + String(idx + 2),
-          type: "internal",
-          internalIndex: idx,
-        });
-      });
-      if (defs.length > RubyCaveManager.EVENT_TOTAL_LEVELS) {
-        defs.length = RubyCaveManager.EVENT_TOTAL_LEVELS;
-      }
-      this._cachedEventLevelDefs = defs;
-      return defs;
-    }
-
     _eventLevelCount() {
-      return this._eventLevelDefs().length;
+      return RubyCaveManager.STICKER_LEVELS.length;
     }
 
-    _eventLevelDef(index) {
-      const defs = this._eventLevelDefs();
+    _stickerLevelDef(index) {
+      const defs = RubyCaveManager.STICKER_LEVELS;
       if (!defs.length) return null;
       const safeIndex = Math.max(0, Math.min(index, defs.length - 1));
       return defs[safeIndex];
+    }
+
+    // Per-level placement persistence: { [levelNumber]: { [stickerId]: true } }.
+    _placedMapForLevel(levelIndex) {
+      const all = this._save.rubyCaveStickerPlaced || (this._save.rubyCaveStickerPlaced = {});
+      const key = String(levelIndex);
+      if (!all[key] || typeof all[key] !== "object") all[key] = {};
+      return all[key];
     }
 
     _showView(name) {
@@ -3720,7 +4886,9 @@
       this.el.hubRegen.textContent = txt;
       this.el.gameRegen.textContent = txt;
       if (this.el.hubBalanceMid) this.el.hubBalanceMid.textContent = shortTxt;
-      if (this.el.gameBalanceTime) this.el.gameBalanceTime.textContent = shortTxt;
+      // The in-game HUD shows the live Event energy count (e.g. "24/25") next to
+      // the blue lightning bolt, rather than the regen timer.
+      if (this.el.gameBalanceTime) this.el.gameBalanceTime.textContent = val;
     }
 
     _regenTick() {
@@ -3781,264 +4949,203 @@
       }
     }
 
+    // Build an isometric sticker room for level `idx` (0-based). Each sticker's
+    // target slot is rendered into #rc-room-placed as an INVISIBLE hitbox (the
+    // empty slot is not drawn — hidden-target puzzle), and the draggable tray
+    // tiles for every still-unplaced sticker go into #rc-tray. Already-placed
+    // stickers (from save) render as filled (visible) at their slot.
     _buildLevel(idx) {
       this._stopExternalEventLevel();
-      const lvl = RubyCaveManager.LEVELS[idx];
-      this._activeInternalLevelIndex = idx;
-      this.placed = 0;
-      this.slots = [];
-      this.el.scene.innerHTML = "";
-      this.el.tray.innerHTML = "";
-      const S = RubyCaveManager.SHAPES;
+      const lvl = this._stickerLevelDef(idx);
+      this._activeStickerLevel = idx;
+      if (!lvl) return;
+      const placedMap = this._placedMapForLevel(idx);
+      this.placedCount = 0;
+      this.targetCount = lvl.stickers.length;
+      // Swap in this level's themed room shell so every level looks different.
+      if (this.el.roomShell) {
+        this.el.roomShell.innerHTML = RC_ROOM_SHELLS[lvl.room] || RC_ROOM_SHELLS.observatory || "";
+      }
+      if (this.el.roomPlaced) this.el.roomPlaced.innerHTML = "";
+      if (this.el.tray) this.el.tray.innerHTML = "";
 
-      lvl.slots.forEach((s) => {
-        const slot = document.createElement("div");
-        slot.className = "rc-slot";
-        slot.dataset.shape = s.shape;
-        slot.style.setProperty("--x", `${s.x}%`);
-        slot.style.setProperty("--y", `${s.y}%`);
-        slot.style.setProperty("--size", `${s.size}%`);
-        slot.innerHTML = this._svg(s.shape, "#151529");
-        const p = document.createElement("div");
-        p.className = "rc-placed";
-        p.innerHTML = this._svg(s.shape, S[s.shape].color);
-        slot.appendChild(p);
-        this.el.scene.appendChild(slot);
-        this.slots.push(slot);
+      // Target slots: render back-to-front (smaller y first) so closer items
+      // overlap farther ones correctly. Empty slots are invisible hitboxes; the
+      // emoji is kept ready so it reveals instantly when filled. Only filled
+      // slots expose a name/tooltip (so the hidden answer never leaks).
+      const ordered = lvl.stickers.slice().sort((a, b) => a.y - b.y);
+      ordered.forEach((s) => {
+        const filled = !!placedMap[s.id];
+        if (filled) this.placedCount += 1;
+        const slot = document.createElement("span");
+        slot.className = "rc-room-slot rc-room-slot--surface-" + s.surface
+          + (filled ? " rc-room-slot--filled" : " rc-room-slot--empty");
+        slot.dataset.stickerId = s.id;
+        slot.style.left = (s.x * 100) + "%";
+        slot.style.top = (s.y * 100) + "%";
+        const depth = Math.max(0, Math.min(1, s.y));
+        const scale = 0.78 + depth * 0.42;
+        slot.style.setProperty("--iso-scale", scale.toFixed(3));
+        slot.style.zIndex = String(100 + Math.floor(depth * 900));
+        if (filled) slot.title = s.name;
+        slot.textContent = s.emoji;
+        if (this.el.roomPlaced) this.el.roomPlaced.appendChild(slot);
       });
 
-      lvl.tray.forEach((shape) => {
-        const d = document.createElement("div");
-        d.className = "rc-piece";
-        d.dataset.shape = shape;
-        d.style.setProperty("--b", S[shape].border);
-        d.style.setProperty("--bg", S[shape].bg);
-        d.style.setProperty("--shadow", S[shape].shadow);
-        d.innerHTML = this._svg(shape, S[shape].rich);
-        this.el.tray.appendChild(d);
+      // Tray tiles for unplaced stickers, in catalog order.
+      lvl.stickers.forEach((s) => {
+        if (placedMap[s.id]) return;
+        const tile = document.createElement("button");
+        tile.type = "button";
+        tile.className = "rc-sticker-tile";
+        tile.dataset.stickerId = s.id;
+        tile.setAttribute("aria-label", s.name);
+        tile.title = s.name;
+        const glyph = document.createElement("span");
+        glyph.className = "rc-sticker-glyph";
+        glyph.textContent = s.emoji;
+        tile.appendChild(glyph);
+        this._bindStickerDrag(tile, s);
+        if (this.el.tray) this.el.tray.appendChild(tile);
       });
+
+      this._updateGameProgress();
     }
 
-    _bindExternalEventFrame() {
-      if (!this.el.externalFrame || this._eventExternalFrameBound) return;
-      this._eventExternalFrameBound = true;
-      this.el.externalFrame.addEventListener("load", () => {
-        if (!this._eventExternalActive) return;
-        this._attachExternalEventBridge();
-      });
-    }
-
-    _attachExternalEventBridge() {
-      try {
-        const frameWin = this.el.externalFrame.contentWindow;
-        if (!frameWin) return;
-        const doc = frameWin.document;
-        frameWin.gameEnd = () => this._onExternalEventLevelCompleted();
-        frameWin.openStore = () => {};
-        if (doc && doc.head) {
-          const style = doc.createElement("style");
-          style.textContent = "#dl,#winDl,.downloadBtn,#winBtns{display:none !important;}";
-          doc.head.appendChild(style);
-        }
-        this._stopExternalEventObserver();
-        const layer = doc ? doc.getElementById("pieceLayer") : null;
-        if (!layer) return;
-        this._eventExternalSeenPieceIds = new Set();
-        layer.querySelectorAll(".piece[data-i]").forEach((el) => {
-          const id = String(el.getAttribute("data-i") || "");
-          if (id) this._eventExternalSeenPieceIds.add(id);
-        });
-        this._eventExternalObserver = new MutationObserver((mutations) => {
-          mutations.forEach((m) => {
-            m.addedNodes.forEach((node) => {
-              if (!(node instanceof frameWin.Element)) return;
-              if (!node.classList.contains("piece")) return;
-              const pieceId = String(node.getAttribute("data-i") || "");
-              if (!pieceId || this._eventExternalSeenPieceIds.has(pieceId)) return;
-              this._eventExternalSeenPieceIds.add(pieceId);
-              this._onExternalEventPiecePlaced(pieceId);
-            });
-          });
-        });
-        this._eventExternalObserver.observe(layer, { childList: true });
-      } catch (_) {
-        // Keep event-level bridge best-effort.
+    _updateGameProgress() {
+      if (this.el.gameInfo) {
+        this.el.gameInfo.textContent = `Stickers ${this.placedCount || 0}/${this.targetCount || 0}`;
       }
     }
 
-    _stopExternalEventObserver() {
-      if (this._eventExternalObserver) {
-        this._eventExternalObserver.disconnect();
-        this._eventExternalObserver = null;
-      }
-      this._eventExternalSeenPieceIds = new Set();
-    }
-
-    _onExternalEventPiecePlaced(pieceId) {
-      if (this._eventExternalLevelDone) return;
-      if (this.energy < 1) {
-        this._openEnergyRefillModal();
-        this._showToast("Not enough energy");
-        return;
-      }
-      this.energy -= 1;
-      if (this.energy < RubyCaveManager.ENERGY_MAX && !this.nextEnergyAt) {
-        this.nextEnergyAt = Date.now() + RubyCaveManager.REGEN_MS;
-      }
-      this._persist();
-      this._updateEnergyUI();
-    }
-
-    _startExternalEventLevel(levelDef) {
-      const src = levelDef && levelDef.src ? String(levelDef.src) : "";
-      if (!src || !this.el.externalHost || !this.el.externalFrame) return false;
-      this._bindExternalEventFrame();
-      this._eventExternalActive = true;
-      this._eventExternalLevelDone = false;
-      this.el.game.classList.add("rc-game--external");
-      this.el.externalHost.classList.remove("rc-external-host--hidden");
-      if (this._eventExternalLoadedLevelIndex === this.currentLevel && this._eventExternalLoadedSrc === src) {
-        this._attachExternalEventBridge();
-        return true;
-      }
-      this._eventExternalLoadedLevelIndex = this.currentLevel;
-      this._eventExternalLoadedSrc = src;
-      this.el.externalFrame.src = src;
-      return true;
-    }
-
+    // External-level plumbing is retired for the sticker-room flow; kept as a
+    // safe no-op so the (still-present, hidden) iframe host never shows.
     _stopExternalEventLevel() {
-      this._eventExternalActive = false;
-      this._eventExternalLevelDone = false;
-      this._stopExternalEventObserver();
       if (this.el.game) this.el.game.classList.remove("rc-game--external");
       if (this.el.externalHost) this.el.externalHost.classList.add("rc-external-host--hidden");
     }
 
-    _onExternalEventLevelCompleted() {
-      if (!this._eventExternalActive || this._eventExternalLevelDone) return;
-      this._eventExternalLevelDone = true;
-      this.completed = Math.max(this.completed, this.currentLevel + 1);
-      this._persist();
-      if (this.completed >= this._eventLevelCount() && !this._save.rubyCaveRewardClaimed) {
-        this._showGrandReward();
-      } else {
-        this.el.done.classList.add("rc-visible");
-      }
-    }
-
-    _matchSlot(piece) {
-      const shape = piece.dataset.shape;
-      const px = parseFloat(piece.style.left) + piece.offsetWidth / 2;
-      const py = parseFloat(piece.style.top) + piece.offsetHeight / 2;
-      for (const s of this.slots) {
-        if (s.classList.contains("rc-filled")) continue;
-        if (s.dataset.shape !== shape) continue;
-        const r = s.getBoundingClientRect();
-        const sx = r.left + r.width / 2, sy = r.top + r.height / 2;
-        if (Math.hypot(px - sx, py - sy) < r.width * 0.48) return s;
-      }
-      return null;
-    }
-
-    _toTray(piece) {
-      piece.classList.remove("rc-drag");
-      piece.classList.add("rc-ret");
-      piece.style.left = this.originRect.left + "px";
-      piece.style.top = this.originRect.top + "px";
-      const end = () => {
-        piece.classList.remove("rc-ret");
-        piece.style.left = "";
-        piece.style.top = "";
-        piece.style.width = "";
-        piece.style.height = "";
-        piece.removeEventListener("transitionend", end);
-      };
-      piece.addEventListener("transitionend", end);
-    }
-
-    _snap(piece, slot) {
-      const r = slot.getBoundingClientRect();
-      const size = r.width;
-      piece.classList.remove("rc-drag");
-      piece.classList.add("rc-snap");
-      piece.style.left = (r.left + r.width / 2 - size / 2) + "px";
-      piece.style.top = (r.top + r.height / 2 - size / 2) + "px";
-      piece.style.width = size + "px";
-      piece.style.height = size + "px";
-      piece.style.setProperty("--b", "transparent");
-      piece.style.setProperty("--bg", "transparent");
-      piece.style.setProperty("--shadow", "transparent");
-      const end = () => {
-        piece.removeEventListener("transitionend", end);
-        slot.classList.add("rc-filled");
-        piece.remove();
-        this.placed += 1;
-        const internalIdx = typeof this._activeInternalLevelIndex === "number" ? this._activeInternalLevelIndex : 0;
-        const targetCount = RubyCaveManager.LEVELS[internalIdx] ? RubyCaveManager.LEVELS[internalIdx].tray.length : 0;
-        if (targetCount > 0 && this.placed >= targetCount) {
-          this.completed = Math.max(this.completed, this.currentLevel + 1);
-          this._persist();
-          if (this.completed >= this._eventLevelCount() && !this._save.rubyCaveRewardClaimed) {
-            this._showGrandReward();
-          } else {
-            this.el.done.classList.add("rc-visible");
-          }
+    // Drag a tray sticker to its single hidden target position. No hint/highlight
+    // is shown while dragging and no silhouette marks the spot — the player must
+    // guess from the room context. A correct drop (within the target's hitbox)
+    // snaps in and costs 1 Event energy; a wrong drop bounces back with no energy
+    // spent and no progress.
+    _bindStickerDrag(tile, sticker) {
+      const self = this;
+      const ACCEPT_PX = 60;
+      tile.style.touchAction = "none";
+      tile.onpointerdown = (e) => {
+        e.preventDefault();
+        if (tile.dataset.dragging === "1") return;
+        if (self.el.done.classList.contains("rc-visible")) return;
+        if (self.el.energyModal.classList.contains("rc-visible")) return;
+        if (self.el.grandReward.classList.contains("rc-visible")) return;
+        if (self.energy <= 0) {
+          self._openEnergyRefillModal();
+          self._showToast("Not enough energy");
+          return;
         }
+        const targetSlot = self.el.roomPlaced
+          ? self.el.roomPlaced.querySelector('.rc-room-slot[data-sticker-id="' + sticker.id + '"]')
+          : null;
+        if (!targetSlot) return;
+
+        tile.dataset.dragging = "1";
+        tile.classList.add("rc-sticker-tile--dragging");
+
+        const ghost = document.createElement("div");
+        ghost.className = "rc-sticker-ghost";
+        ghost.textContent = sticker.emoji;
+        document.body.appendChild(ghost);
+        const place = (x, y) => { ghost.style.left = x + "px"; ghost.style.top = y + "px"; };
+        place(e.clientX, e.clientY);
+        try { tile.setPointerCapture(e.pointerId); } catch (_) {}
+
+        const distToTarget = (cx, cy) => {
+          const r = targetSlot.getBoundingClientRect();
+          const tx = r.left + r.width / 2, ty = r.top + r.height / 2;
+          return Math.hypot(cx - tx, cy - ty);
+        };
+        const cleanup = () => {
+          tile.onpointermove = null;
+          tile.onpointerup = null;
+          tile.onpointercancel = null;
+          tile.classList.remove("rc-sticker-tile--dragging");
+          delete tile.dataset.dragging;
+          if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+          try { tile.releasePointerCapture(e.pointerId); } catch (_) {}
+        };
+        const bounce = () => {
+          tile.classList.add("rc-sticker-tile--bounce");
+          setTimeout(() => tile.classList.remove("rc-sticker-tile--bounce"), 340);
+        };
+        tile.onpointermove = (mv) => place(mv.clientX, mv.clientY);
+        tile.onpointerup = (up) => {
+          const accept = distToTarget(up.clientX, up.clientY) <= ACCEPT_PX;
+          cleanup();
+          if (!accept) { bounce(); return; }
+          if (self.energy < 1) {
+            bounce();
+            self._openEnergyRefillModal();
+            self._showToast("Not enough energy");
+            return;
+          }
+          self._placeSticker(sticker, tile, targetSlot);
+        };
+        tile.onpointercancel = () => { cleanup(); bounce(); };
       };
-      piece.addEventListener("transitionend", end);
     }
 
-    _pointerDown(e) {
-      if (this._screen.classList.contains("hidden")) return;
-      if (this.el.game.classList.contains("rc-view--hidden")) return;
-      if (this.el.done.classList.contains("rc-visible")) return;
-      if (this.el.energyModal.classList.contains("rc-visible")) return;
-      if (this.el.grandReward.classList.contains("rc-visible")) return;
-      const piece = e.target.closest(".rc-piece");
-      if (!piece) return;
-      if (this.energy <= 0) {
-        this._openEnergyRefillModal();
-        this._showToast("Not enough energy");
-        return;
-      }
-      this.activePiece = piece;
-      this.originRect = piece.getBoundingClientRect();
-      this.offX = e.clientX - this.originRect.left;
-      this.offY = e.clientY - this.originRect.top;
-      piece.classList.add("rc-drag");
-      piece.style.left = this.originRect.left + "px";
-      piece.style.top = this.originRect.top + "px";
-      piece.style.width = this.originRect.width + "px";
-      piece.style.height = this.originRect.height + "px";
-      piece.setPointerCapture(e.pointerId);
-    }
-
-    _pointerMove(e) {
-      if (!this.activePiece) return;
-      this.activePiece.style.left = (e.clientX - this.offX) + "px";
-      this.activePiece.style.top = (e.clientY - this.offY) + "px";
-    }
-
-    _pointerUp() {
-      if (!this.activePiece) return;
-      const piece = this.activePiece;
-      this.activePiece = null;
-      const target = this._matchSlot(piece);
-      if (!target) { this._toTray(piece); return; }
-      if (this.energy < 1) {
-        this._toTray(piece);
-        this._openEnergyRefillModal();
-        this._showToast("Not enough energy");
-        return;
-      }
+    _placeSticker(sticker, tile, slot) {
+      // Correct placement consumes 1 Event energy.
       this.energy -= 1;
       if (this.energy < RubyCaveManager.ENERGY_MAX && !this.nextEnergyAt) {
         this.nextEnergyAt = Date.now() + RubyCaveManager.REGEN_MS;
       }
+      const placedMap = this._placedMapForLevel(this._activeStickerLevel);
+      placedMap[sticker.id] = true;
+      this.placedCount += 1;
       this._persist();
       this._updateEnergyUI();
-      this._snap(piece, target);
+
+      slot.classList.remove("rc-room-slot--empty");
+      slot.classList.add("rc-room-slot--filled", "rc-room-slot--just-placed");
+      slot.title = sticker.name;
+      setTimeout(() => slot.classList.remove("rc-room-slot--just-placed"), 700);
+      if (tile.parentNode) tile.parentNode.removeChild(tile);
+      this._updateGameProgress();
+
+      if (this.placedCount >= this.targetCount) {
+        this._onStickerLevelComplete();
+      }
+    }
+
+    _onStickerLevelComplete() {
+      this.completed = Math.max(this.completed, this.currentLevel + 1);
+      this._persist();
+      const isFinal = this.completed >= this._eventLevelCount() && !this._save.rubyCaveRewardClaimed;
+      setTimeout(() => {
+        if (isFinal) this._showGrandReward();
+        else this._showLevelComplete();
+      }, 520);
+    }
+
+    _showLevelComplete() {
+      if (this.el.doneTitle) this.el.doneTitle.textContent = "LEVEL COMPLETED";
+      this._renderRoomPreview();
+      this.el.done.classList.add("rc-visible");
+    }
+
+    // Clone the just-finished (fully decorated) room into the completion modal
+    // as a small static preview.
+    _renderRoomPreview() {
+      if (!this.el.donePreview || !this.el.room) return;
+      this.el.donePreview.innerHTML = "";
+      const clone = this.el.room.cloneNode(true);
+      clone.removeAttribute("id");
+      clone.classList.add("rc-room--preview");
+      clone.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+      this.el.donePreview.appendChild(clone);
     }
 
     _handleEnterLevel(evt) {
@@ -4059,18 +5166,7 @@
       const nextIdx = Math.min(Math.max(0, this.completed), totalLevels - 1);
       this.currentLevel = nextIdx;
       if (this.el.gameTitleMain) this.el.gameTitleMain.textContent = `Level ${nextIdx + 1}`;
-      const def = this._eventLevelDef(nextIdx);
-      if (def && def.type === "html-playable") {
-        const started = this._startExternalEventLevel(def);
-        if (!started) {
-          this._showToast("Event level unavailable");
-          return;
-        }
-      } else {
-        const internalIdx = def && typeof def.internalIndex === "number" ? def.internalIndex : 0;
-        this._buildLevel(internalIdx);
-      }
-      this.el.gameInfo.textContent = `Level ${nextIdx + 1} / ${totalLevels}`;
+      this._buildLevel(nextIdx);
       this._showView("game");
     }
 
@@ -4080,8 +5176,16 @@
       this._persist();
       this.el.done.classList.remove("rc-visible");
       this._stopExternalEventLevel();
-      if (this.completed >= this._eventLevelCount() && !this._save.rubyCaveRewardClaimed) {
+      const total = this._eventLevelCount();
+      if (this.completed >= total && !this._save.rubyCaveRewardClaimed) {
         this._showGrandReward();
+        return;
+      }
+      // Continue straight into the next level when one remains and there is
+      // energy to play it; otherwise fall back to the hub (where the refill
+      // prompt lives).
+      if (this.completed < total && this.energy >= 1) {
+        this._handleEnterLevel(null);
         return;
       }
       this._showView("hub");
@@ -4116,13 +5220,11 @@
     }
 
     _onEnergyRefillWithGems() {
+      // Placeholder: spend gems if the player happens to have them, but never
+      // block — tapping always refills Event energy to full (25).
       const cost = 1000;
       const gems = Math.max(0, parseInt(this._save.gemsTotal, 10) || 0);
-      if (gems < cost) {
-        this._showToast("Not enough gems");
-        return;
-      }
-      this._save.gemsTotal = gems - cost;
+      if (gems >= cost) this._save.gemsTotal = gems - cost;
       this._applyEnergyRefill();
     }
 
@@ -4249,7 +5351,7 @@
 
     _tutorStepPlay() {
       const target = this.el.enterBtn;
-      this._positionTutor(target, "Tap Play to enter the event level and start solving puzzles!", false);
+      this._positionTutor(target, "Tap Play to enter the observatory and start decorating with stickers!", false);
       const t = this._tutorEls();
       t.finger.style.top = (target.getBoundingClientRect().top - this._screen.querySelector(".rc-inner").getBoundingClientRect().top - 32) + "px";
 
@@ -4269,40 +5371,36 @@
       if (!inner) return;
       const ir = inner.getBoundingClientRect();
 
-      const firstPiece = this.el.tray.querySelector(".rc-piece");
-      const firstSlot = this.el.scene.querySelector(".rc-slot");
-      if (!firstPiece || !firstSlot) { this._tutorStep = 3; this._runTutorialStep(); return; }
+      const firstPiece = this.el.tray.querySelector(".rc-sticker-tile");
+      const roomEl = this.el.room || this.el.scene;
+      if (!firstPiece || !roomEl) { this._tutorStep = 3; this._runTutorialStep(); return; }
 
       const pr = firstPiece.getBoundingClientRect();
-      const sr = firstSlot.getBoundingClientRect();
+      const rr = roomEl.getBoundingClientRect();
+      const trayR = this.el.tray.getBoundingClientRect();
       const pad = 8;
 
-      const minX = Math.min(pr.left, sr.left) - ir.left - pad;
-      const minY = Math.min(pr.top, sr.top) - ir.top - pad;
-      const maxX = Math.max(pr.right, sr.right) - ir.left + pad;
-      const maxY = Math.max(pr.bottom, sr.bottom) - ir.top + pad;
+      // Highlight only the TRAY — never the hidden target position.
       const hl = t.highlight;
-      hl.style.left = minX + "px";
-      hl.style.top = minY + "px";
-      hl.style.width = (maxX - minX) + "px";
-      hl.style.height = (maxY - minY) + "px";
+      hl.style.left = (trayR.left - ir.left - pad) + "px";
+      hl.style.top = (trayR.top - ir.top - pad) + "px";
+      hl.style.width = (trayR.width + pad * 2) + "px";
+      hl.style.height = (trayR.height + pad * 2) + "px";
       hl.style.borderRadius = "18px";
 
-      t.text.textContent = "Drag puzzle pieces from the tray and drop them into matching slots!";
+      t.text.textContent = "Drag stickers from the tray into the room and figure out where each one belongs. A correct drop snaps into place — a wrong drop returns to the tray.";
       const bub = t.bubble;
       bub.style.left = "50%";
       bub.style.transform = "translateX(-50%)";
-      bub.style.top = (minY - 80) + "px";
-      bub.style.bottom = "";
-      if (parseFloat(bub.style.top) < 40) {
-        bub.style.top = "";
-        bub.style.bottom = (ir.height - maxY - 70) + "px";
-      }
+      bub.style.top = "";
+      bub.style.bottom = (ir.height - (trayR.top - ir.top) + 14) + "px";
 
+      // The finger demonstrates the gesture: drag from the first tray sticker up
+      // into the room centre — NOT toward any specific (invisible) target.
       const finger = t.finger;
       finger.classList.add("rc-tutor-finger--drag");
-      const dx = (sr.left + sr.width / 2) - (pr.left + pr.width / 2);
-      const dy = (sr.top + sr.height / 2) - (pr.bottom);
+      const dx = (rr.left + rr.width / 2) - (pr.left + pr.width / 2);
+      const dy = (rr.top + rr.height * 0.55) - (pr.bottom);
       finger.style.setProperty("--drag-dx", dx + "px");
       finger.style.setProperty("--drag-dy", dy + "px");
       finger.style.left = (pr.left - ir.left + pr.width / 2 - 14) + "px";
@@ -4319,7 +5417,7 @@
     _tutorStepEnergy() {
       const target = this.el.gameEnergy?.closest(".rc-energy-pill") || this.el.gameEnergy;
       if (!target) { this._endTutorial(); return; }
-      this._positionTutor(target, "This event has its own energy. Each piece placed costs 1 energy — separate from the main game!", true);
+      this._positionTutor(target, "This event has its own energy. Each sticker placed costs 1 energy — separate from the main game!", true);
       this._tutorTapHandler = () => {
         this._endTutorial();
       };
@@ -4349,9 +5447,9 @@
       this.nextEnergyAt = this._save.rubyCaveNextEnergyAt || null;
       this.eventEnd = this._save.rubyCaveEventEnd;
       this.currentLevel = 0;
-      this.placed = 0;
-      this.slots = [];
-      this._activeInternalLevelIndex = 0;
+      this.placedCount = 0;
+      this.targetCount = 0;
+      this._activeStickerLevel = 0;
       this._stopExternalEventLevel();
     }
   }
@@ -5199,6 +6297,169 @@
       this._updatePuzzleEnergyUI();
     }
 
+    // Grant a Battle Pass reward by type. Sticker packs go to the pending-pack
+    // queue (opened later in the Stickers tab); gems/energy/hammers add directly.
+    _grantBpReward(rw) {
+      if (!rw) return;
+      if (rw.type === "pack") {
+        this.collectionManager.addPendingStickerPack(rw.grade);
+        if (this.collectionUI && typeof this.collectionUI.refreshStickerLevelIfOpen === "function") {
+          this.collectionUI.refreshStickerLevelIfOpen();
+        }
+      } else if (rw.type === "gems") {
+        this._save.gemsTotal = (this._save.gemsTotal || 0) + (rw.amount || 0);
+        saveSave(this._save);
+      } else if (rw.type === "energy") {
+        this._addPuzzleEnergy(rw.amount || 0);
+      } else if (rw.type === "hammers") {
+        this.addHammers(rw.amount || 0);
+      }
+    }
+
+    // ===== Sticker Shop ====================================================
+    openShopScreen(returnTo) {
+      const active = document.querySelector(".screen.active");
+      let prev = returnTo || (active ? active.id : "start-screen");
+      if (prev === "shop-screen") prev = "album-screen";
+      this._shopPrevScreen = prev;
+      if (!this._shopCategory || !SHOP_PACK_TABS.some((t) => t.key === this._shopCategory)) {
+        this._shopCategory = SHOP_PACK_TABS[0].key;
+      }
+      this.ui.showScreen("shop-screen");
+      this._renderShop();
+      const closeBtn = document.getElementById("btn-shop-close");
+      if (closeBtn) closeBtn.onclick = () => this.closeShopScreen();
+    }
+
+    closeShopScreen() {
+      const back = this._shopPrevScreen || "start-screen";
+      if (back === "album-screen" && this.collectionUI && typeof this.collectionUI.showAlbum === "function") {
+        this.collectionUI.showAlbum();
+      } else {
+        this.ui.showScreen(back);
+      }
+    }
+
+    _renderShop() {
+      this._renderShopCurrencies();
+      this._renderShopTabs();
+      this._renderShopGrid();
+    }
+
+    _renderShopCurrencies() {
+      const host = document.getElementById("shop-currencies");
+      if (!host) return;
+      const gems = Math.max(0, parseInt(this._save.gemsTotal, 10) || 0);
+      const coins = Math.max(0, parseInt(this._save.coins, 10) || 0);
+      const tickets = Math.max(0, parseInt(this._save.shopTickets, 10) || 0);
+      const pill = (cls, icon, val) =>
+        '<div class="shop-cur-pill shop-cur-pill--' + cls + '"><span class="shop-cur-icon">' + icon
+        + '</span><span class="shop-cur-val">' + val + '</span><span class="shop-cur-plus">+</span></div>';
+      host.innerHTML = pill("gem", "💎", gems) + pill("paw", "🐾", coins) + pill("ticket", "🎟️", tickets);
+    }
+
+    _renderShopTabs() {
+      const host = document.getElementById("shop-tabs");
+      if (!host) return;
+      host.innerHTML = "";
+      SHOP_PACK_TABS.forEach((tab) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "shop-tab" + (tab.key === this._shopCategory ? " shop-tab--active" : "");
+        btn.innerHTML = '<span class="shop-tab-icon">' + tab.icon + "</span>";
+        btn.setAttribute("aria-label", tab.label);
+        btn.onclick = () => { this._shopCategory = tab.key; this._renderShop(); };
+        host.appendChild(btn);
+      });
+    }
+
+    // The Shop sells sticker PACKS (grade I–V), not individual stickers. Tapping
+    // a pack opens the existing pack-opening animation in the Stickers room and
+    // grants the stickers into the tray.
+    _renderShopGrid() {
+      const host = document.getElementById("shop-grid");
+      if (!host) return;
+      host.innerHTML = "";
+      const tab = SHOP_PACK_TABS.find((t) => t.key === this._shopCategory) || SHOP_PACK_TABS[0];
+
+      // UPDATE card (placeholder refresh).
+      const upd = document.createElement("div");
+      upd.className = "shop-card shop-card--special shop-card--update";
+      upd.innerHTML = '<div class="shop-card-head">UPDATE</div>'
+        + '<div class="shop-card-timer">🕐 23h 58m</div>'
+        + '<button type="button" class="shop-card-btn shop-card-btn--now">NOW ▶</button>';
+      upd.querySelector(".shop-card-btn").onclick = () => this._shopUpdate();
+      host.appendChild(upd);
+
+      // FREE card — opens a free Pack I.
+      const free = document.createElement("div");
+      free.className = "shop-card shop-card--special shop-card--free";
+      const fMeta = getStickerPackTier(1);
+      free.innerHTML = '<div class="shop-card-head">FREE</div>'
+        + '<div class="shop-pack-art shop-pack-icon sticker-pack-tier--1"><span class="bp-pack-band"></span><span class="bp-pack-star">' + fMeta.star + '</span></div>'
+        + '<button type="button" class="shop-card-btn shop-card-btn--free">FREE ▶</button>';
+      free.querySelector(".shop-card-btn").onclick = () => this._shopBuyPack(1, 0);
+      host.appendChild(free);
+
+      // Pack cards (one per tier in this tab).
+      tab.tiers.forEach((tierNum) => {
+        const meta = getStickerPackTier(tierNum);
+        const amount = meta.min === meta.max ? String(meta.min) : (meta.min + "–" + meta.max);
+        const roman = SHOP_PACK_ROMAN[tierNum] || tierNum;
+        const price = meta.gem;
+        const card = document.createElement("div");
+        card.className = "shop-card shop-pack-card";
+        card.innerHTML =
+          '<div class="shop-pack-name">Pack ' + roman + '</div>'
+          + '<div class="shop-pack-art shop-pack-icon sticker-pack-tier--' + tierNum + '"><span class="bp-pack-band"></span><span class="bp-pack-star">' + meta.star + '</span></div>'
+          + '<div class="shop-pack-amount">' + amount + ' stickers</div>'
+          + '<button type="button" class="shop-card-btn shop-card-btn--buy"><span class="shop-gem">💎</span> ' + price + '</button>';
+        card.querySelector(".shop-card-btn").onclick = () => this._shopBuyPack(tierNum, price);
+        host.appendChild(card);
+      });
+    }
+
+    // Buy + open a sticker pack of the given tier. Deducts gems (if affordable),
+    // switches to the Stickers room and plays the existing pack-opening animation;
+    // collected stickers land in the tray.
+    _shopBuyPack(tier, price) {
+      const gems = Math.max(0, parseInt(this._save.gemsTotal, 10) || 0);
+      if (price > 0 && gems < price) { this._shopToast("Not enough gems"); return; }
+      if (price > 0) {
+        this._save.gemsTotal = gems - price;
+        saveSave(this._save);
+      }
+      const meta = getStickerPackTier(tier);
+      if (this.collectionUI && typeof this.collectionUI.showAlbum === "function") {
+        this.collectionUI.showAlbum();
+        setTimeout(() => {
+          if (typeof this.collectionUI._choosePack === "function") {
+            this.collectionUI._choosePack(meta, {});
+          }
+        }, 70);
+      }
+    }
+
+    _shopUpdate() {
+      this._renderShopGrid();
+      this._shopToast("Shop refreshed!");
+    }
+
+    _shopToast(msg) {
+      let t = document.getElementById("shop-toast");
+      if (!t) {
+        t = document.createElement("div");
+        t.id = "shop-toast";
+        t.className = "shop-toast";
+        const inner = document.querySelector("#shop-screen .shop-inner") || document.getElementById("shop-screen");
+        if (inner) inner.appendChild(t);
+      }
+      t.textContent = msg;
+      t.classList.add("shop-toast--show");
+      clearTimeout(this._shopToastTimer);
+      this._shopToastTimer = setTimeout(() => t.classList.remove("shop-toast--show"), 1400);
+    }
+
     _updatePuzzleEnergyUI() {
       const val = this._save.puzzleEnergy || 0;
       const elGame = document.getElementById("energy-count-game");
@@ -5276,6 +6537,15 @@
 
       this.collectionManager.onLevelCompleted(this.currentLevelIndex, { cheated });
       this.addHammers(1);
+      // Reward: 1 sticker pack per core-level completion — randomly Grade 2 or
+      // Grade 3 (50/50). Added as a pending pack (same mechanism as the Wheel of
+      // Fortune), so it persists and opens later in the Stickers tab. This
+      // matches the existing per-completion reward policy (hammers above).
+      const packTier = Math.random() < 0.5 ? 2 : 3;
+      this.collectionManager.addPendingStickerPack(packTier);
+      if (this.collectionUI && typeof this.collectionUI.refreshStickerLevelIfOpen === "function") {
+        this.collectionUI.refreshStickerLevelIfOpen();
+      }
       this.collectionUI.updateCollectionButtons();
 
       if (document.getElementById("toggle-sfx").getAttribute("aria-checked") === "true") {
@@ -5286,7 +6556,8 @@
         timeSec,
         mistakes,
         () => this._onNextLevelClick(),
-        () => this.replayLevel()
+        () => this.replayLevel(),
+        packTier
       );
       this._updateCheatAutoButton();
     }
@@ -5422,6 +6693,8 @@
       };
       const navCollection = document.getElementById("nav-collection");
       if (navCollection) navCollection.onclick = openCollection;
+      const navShop = document.getElementById("nav-shop");
+      if (navShop) navShop.onclick = () => this.openShopScreen();
 
       const openBattlePass = () => {
         this.openBattlePassScreen();
@@ -5663,14 +6936,12 @@
             item.innerHTML = "<span class=\"pack-reveal-coins\">" + coinPart + starPart + "</span>";
           } else {
             const def = CARD_DEFS[r.cardId];
-            const src = def && def.imageSrc ? def.imageSrc : mysteryCardSrc;
-            const name = def ? def.name : "Card";
-            const img = document.createElement("img");
-            img.src = src;
-            img.alt = name;
-            img.className = "pack-reveal-thumb";
-            img.onerror = function () { this.src = mysteryCardSrc; };
-            item.appendChild(img);
+            const name = def ? def.name : "Sticker";
+            const thumb = document.createElement("span");
+            thumb.className = "pack-reveal-thumb pack-reveal-thumb--emoji";
+            thumb.textContent = getStickerEmoji(r.cardId);
+            thumb.setAttribute("aria-hidden", "true");
+            item.appendChild(thumb);
             const label = document.createElement("span");
             label.className = "pack-reveal-name";
             label.textContent = name;
@@ -5753,14 +7024,12 @@
               item.innerHTML = "<span class=\"pack-reveal-coins\">" + coinPart + starPart + "</span>";
             } else {
               const def = CARD_DEFS[r.cardId];
-              const src = def && def.imageSrc ? def.imageSrc : mysteryCardSrc;
-              const name = def ? def.name : "Card";
-              const img = document.createElement("img");
-              img.src = src;
-              img.alt = name;
-              img.className = "pack-reveal-thumb";
-              img.onerror = function () { this.src = mysteryCardSrc; };
-              item.appendChild(img);
+              const name = def ? def.name : "Sticker";
+              const thumb = document.createElement("span");
+              thumb.className = "pack-reveal-thumb pack-reveal-thumb--emoji";
+              thumb.textContent = getStickerEmoji(r.cardId);
+              thumb.setAttribute("aria-hidden", "true");
+              item.appendChild(thumb);
               const label = document.createElement("span");
               label.className = "pack-reveal-name";
               label.textContent = name;
@@ -5837,14 +7106,12 @@
               item.innerHTML = "<span class=\"pack-reveal-coins\">" + coinPart + starPart + "</span>";
             } else {
               const def = CARD_DEFS[r.cardId];
-              const src = def && def.imageSrc ? def.imageSrc : mysteryCardSrc;
-              const name = def ? def.name : "Card";
-              const img = document.createElement("img");
-              img.src = src;
-              img.alt = name;
-              img.className = "pack-reveal-thumb";
-              img.onerror = function () { this.src = mysteryCardSrc; };
-              item.appendChild(img);
+              const name = def ? def.name : "Sticker";
+              const thumb = document.createElement("span");
+              thumb.className = "pack-reveal-thumb pack-reveal-thumb--emoji";
+              thumb.textContent = getStickerEmoji(r.cardId);
+              thumb.setAttribute("aria-hidden", "true");
+              item.appendChild(thumb);
               const label = document.createElement("span");
               label.className = "pack-reveal-name";
               label.textContent = name;
@@ -5961,9 +7228,10 @@
             + (!tierUnlocked ? " bp-tier-card--locked" : "")
             + (freeClaimedT ? " bp-tier-card--claimed" : "")
             + (freeClaimable ? " bp-tier-card--claimable" : "");
+          const freeRw = BP_REWARDS.free[t - 1];
           const freeReward = document.createElement("div");
           freeReward.className = "bp-tier-reward";
-          freeReward.innerHTML = `<img class="bp-tier-reward-icon" src="${BP_GEM_ICON_SRC}" alt="" aria-hidden="true"><span class="bp-tier-reward-count">x3</span>`;
+          freeReward.innerHTML = bpRewardHTML(freeRw);
           freeCard.appendChild(freeReward);
 
           if (freeClaimable) {
@@ -5977,8 +7245,9 @@
               self._save.xpTotal = (self._save.xpTotal || 0) + BP_XP_PER_TIER;
               if (!self._save.bpClaims.freeClaimedTiers) self._save.bpClaims.freeClaimedTiers = [];
               if (self._save.bpClaims.freeClaimedTiers.indexOf(t) < 0) self._save.bpClaims.freeClaimedTiers.push(t);
-              self.addHammers(1);
+              self._grantBpReward(freeRw);
               saveSave(self._save);
+              self.collectionUI.updateCollectionButtons();
               renderList();
             };
             freeCard.appendChild(claimBtn);
@@ -6006,9 +7275,10 @@
             + (premiumLocked ? " bp-tier-card--locked" : "")
             + (premiumClaimedT ? " bp-tier-card--claimed" : "")
             + (premiumClaimable ? " bp-tier-card--claimable" : "");
+          const premiumRw = BP_REWARDS.premium[t - 1];
           const premiumReward = document.createElement("div");
           premiumReward.className = "bp-tier-reward";
-          premiumReward.innerHTML = `<img class="bp-tier-reward-icon bp-tier-reward-icon--chest" src="${BP_CHEST_ICON_SRC}" alt="" aria-hidden="true"><span class="bp-tier-reward-count">x3</span>`;
+          premiumReward.innerHTML = bpRewardHTML(premiumRw);
           premiumCard.appendChild(premiumReward);
 
           if (premiumClaimable) {
@@ -6019,12 +7289,13 @@
             claimBtn.onclick = (e) => {
               e.stopPropagation();
               if (!premiumClaimable) return;
-              self._openPackOpeningFlow(t, getPackStarsForTier(t), () => {
-                self.addHammers(2);
-                renderList();
-                self.collectionUI.updateCollectionButtons();
-                self.collectionUI.updateGlobalCardsProgress();
-              });
+              if (!self._save.bpClaims.premiumClaimedTiers) self._save.bpClaims.premiumClaimedTiers = [];
+              if (self._save.bpClaims.premiumClaimedTiers.indexOf(t) < 0) self._save.bpClaims.premiumClaimedTiers.push(t);
+              self._grantBpReward(premiumRw);
+              saveSave(self._save);
+              self.collectionUI.updateCollectionButtons();
+              self.collectionUI.updateGlobalCardsProgress();
+              renderList();
             };
             premiumCard.appendChild(claimBtn);
           }
@@ -6528,7 +7799,21 @@
           seg.style.transform = "rotate(" + (i * segmentAngle) + "deg)";
           const inner = document.createElement("div");
           inner.className = "wheel-segment-inner";
-          if (item.type === "pack") {
+          if (item.type === "stickerpack") {
+            const packEl = document.createElement("div");
+            packEl.className = "wheel-segment-stickerpack wheel-segment-stickerpack--tier-" + item.tier;
+            packEl.innerHTML =
+              '<span class="wheel-stickerpack-band"></span>' +
+              '<span class="wheel-stickerpack-star">' + getStickerPackTier(item.tier).star + '</span>';
+            packEl.title = stickerPackRewardLabel(item.tier);
+            inner.appendChild(packEl);
+          } else if (item.type === "gems") {
+            const g = document.createElement("div");
+            g.className = "wheel-segment-gems";
+            g.textContent = "💎";
+            g.title = item.amount + " Gems";
+            inner.appendChild(g);
+          } else if (item.type === "pack") {
             const packEl = renderPackIcon({ cardCount: item.cardCount, locked: false, dimmed: false, size: "small", claimable: false });
             packEl.classList.add("wheel-segment-pack");
             inner.appendChild(packEl);
@@ -6540,17 +7825,19 @@
           } else {
             const cardId = item.cardId;
             const def = cardId && CARD_DEFS[cardId];
-            const imgSrc = (def && def.imageSrc) ? def.imageSrc : mysteryCardSrc;
-            const img = document.createElement("img");
-            img.src = imgSrc;
-            img.alt = (def && def.name) ? def.name : "Card";
-            img.className = "wheel-segment-card-thumb";
-            img.onerror = function () { this.src = mysteryCardSrc; };
-            inner.appendChild(img);
+            const thumb = document.createElement("span");
+            thumb.className = "wheel-segment-card-thumb wheel-segment-card-thumb--emoji";
+            thumb.textContent = cardId ? getStickerEmoji(cardId) : "🎴";
+            thumb.title = (def && def.name) || "Sticker";
+            inner.appendChild(thumb);
           }
           const mul = document.createElement("div");
           mul.className = "wheel-segment-multiplier";
-          if (item.type === "pack") mul.textContent = "x" + (item.cardCount || 1);
+          if (item.type === "stickerpack") {
+            mul.textContent = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V" }[item.tier] || String(item.tier);
+          }
+          else if (item.type === "gems") mul.textContent = "x" + (item.amount || 1);
+          else if (item.type === "pack") mul.textContent = "x" + (item.cardCount || 1);
           else if (item.type === "hammers") mul.textContent = "x" + (item.amount || 1);
           else mul.textContent = "x1";
           inner.appendChild(mul);
@@ -6644,6 +7931,56 @@
             });
             return;
           }
+          if (wonItem.type === "stickerpack") {
+            // Award the pack to the Stickers feature as a pending (unopened)
+            // pack so it persists and can be opened there later — works even
+            // though we're on the wheel/home screen right now.
+            this.collectionManager.addPendingStickerPack(wonItem.tier);
+            saveSave(this._save);
+            if (this.collectionUI && typeof this.collectionUI.refreshStickerLevelIfOpen === "function") {
+              this.collectionUI.refreshStickerLevelIfOpen();
+            }
+            const tierMeta = getStickerPackTier(wonItem.tier);
+            const label = stickerPackRewardLabel(wonItem.tier);
+            const rewardModal = document.getElementById("wheel-reward-modal");
+            const rewardTitle = document.querySelector(".wheel-reward-title");
+            const cardBack = document.getElementById("wheel-reward-card-back");
+            if (rewardTitle) rewardTitle.textContent = "You won a " + label + "!";
+            if (cardBack) {
+              cardBack.innerHTML = '<div class="wheel-stickerpack-reward wheel-segment-stickerpack--tier-'
+                + wonItem.tier + '"><span class="wheel-stickerpack-band"></span><span class="wheel-stickerpack-star">'
+                + tierMeta.star + '</span></div>';
+            }
+            if (rewardModal) rewardModal.classList.remove("hidden");
+            const onAwesome = () => {
+              if (rewardModal) rewardModal.classList.add("hidden");
+              document.getElementById("btn-wheel-reward-ok").onclick = null;
+              rewardModal.onclick = null;
+              setWheelState(stateFromCooldown());
+            };
+            document.getElementById("btn-wheel-reward-ok").onclick = onAwesome;
+            rewardModal.onclick = (e) => { if (e.target === rewardModal) onAwesome(); };
+            return;
+          }
+          if (wonItem.type === "gems") {
+            this._save.gemsTotal = (this._save.gemsTotal || 0) + (wonItem.amount || 0);
+            saveSave(this._save);
+            const rewardModal = document.getElementById("wheel-reward-modal");
+            const rewardTitle = document.querySelector(".wheel-reward-title");
+            const cardBack = document.getElementById("wheel-reward-card-back");
+            if (rewardTitle) rewardTitle.textContent = "You won +" + (wonItem.amount || 0) + " gems!";
+            if (cardBack) cardBack.innerHTML = "<div class=\"wheel-gems-reward\">💎</div>";
+            if (rewardModal) rewardModal.classList.remove("hidden");
+            const onAwesome = () => {
+              if (rewardModal) rewardModal.classList.add("hidden");
+              document.getElementById("btn-wheel-reward-ok").onclick = null;
+              rewardModal.onclick = null;
+              setWheelState(stateFromCooldown());
+            };
+            document.getElementById("btn-wheel-reward-ok").onclick = onAwesome;
+            rewardModal.onclick = (e) => { if (e.target === rewardModal) onAwesome(); };
+            return;
+          }
           if (wonItem.type === "hammers") {
             this.addHammers(wonItem.amount || 1);
             const rewardModal = document.getElementById("wheel-reward-modal");
@@ -6675,18 +8012,17 @@
           if (cardBack) {
             cardBack.innerHTML = "";
             const def = cardId && CARD_DEFS[cardId];
-            const wonSrc = (def && def.imageSrc) ? def.imageSrc : CARD_IMAGE_BASE + "card_01.png";
-            const wonImg = document.createElement("img");
-            wonImg.src = wonSrc;
-            wonImg.alt = (def && def.name) ? def.name : "Card";
-            wonImg.className = "wheel-reward-card-img";
-            wonImg.onerror = function () { this.src = CARD_IMAGE_BASE + "card_01.png"; };
-            cardBack.appendChild(wonImg);
+            const wonGlyph = document.createElement("span");
+            wonGlyph.className = "wheel-reward-card-img wheel-reward-card-img--emoji";
+            wonGlyph.textContent = cardId ? getStickerEmoji(cardId) : "✨";
+            wonGlyph.setAttribute("aria-hidden", "true");
+            wonGlyph.title = (def && def.name) || "Sticker";
+            cardBack.appendChild(wonGlyph);
           }
           if (rewardTitle && cardId && CARD_DEFS[cardId] && CARD_DEFS[cardId].name) {
             rewardTitle.textContent = "You won " + CARD_DEFS[cardId].name + "!";
           } else if (rewardTitle) {
-            rewardTitle.textContent = "You won a Card!";
+            rewardTitle.textContent = "You won a Sticker!";
           }
           if (rewardModal) rewardModal.classList.remove("hidden");
           const onAwesome = () => {
@@ -7249,16 +8585,7 @@
       this._save.leaderboardUnlocked = true;
       this._save.leaderboardTutorCompleted = true;
       this.collectionManager._ensureCardsStructure();
-      const cards = this._save.cards;
-      ALBUM_DEFS.forEach((def) => {
-        (def.cardIds || []).forEach((id) => {
-          cards.collected[id] = true;
-        });
-        if (this._save.albums[def.id]) {
-          this._save.albums[def.id].collectedCount = (def.cardIds || []).length;
-        }
-      });
-      cards.newInbox = [];
+      this.collectionManager.autoFillStickerLevel();
       saveSave(this._save);
       this._applySaveToUI();
       this.updateBattlePassWidget();
