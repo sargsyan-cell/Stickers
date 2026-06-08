@@ -281,6 +281,18 @@
       albums: {},
       cards: { collected: {}, newInbox: [], duplicates: {} },
       stickerLevel: { placed: {}, unlocked: {}, firstPackOpened: false, pendingPacks: [] },
+      // First-time onboarding flow for the standalone Stickers feature. New
+      // saves run the full guided flow; existing saves are marked complete in
+      // the migration block so returning players are never forced through it.
+      stickerOnboarding: {
+        hasSeenEntryTutorial: false,
+        hasCreatedCharacter: false,
+        hasChosenRoom: false,
+        hasSeenPlacementTutorial: false,
+        hasSeenPlusTutorial: false,
+      },
+      stickerCharacter: null, // { color, clothes, hat }
+      stickerRoomStyle: null, // room style key, e.g. "cream"
       albumStars: 0,
       eventHammers: 0,
       rewards: { trophies: 0, unlockedRewards: [], trophiesGoldCup: false },
@@ -815,6 +827,28 @@
         if (!Array.isArray(merged.stickerLevel.pendingPacks)) {
           merged.stickerLevel.pendingPacks = [];
         }
+        // Stickers first-time onboarding. If absent, mark complete for any
+        // save that already has sticker activity so returning players skip the
+        // guided flow; brand-new saves keep the false defaults and run it.
+        if (!merged.stickerOnboarding || typeof merged.stickerOnboarding !== "object") {
+          const hadStickerActivity = !!(merged.stickerLevel
+            && (merged.stickerLevel.firstPackOpened
+              || (merged.stickerLevel.unlocked && Object.keys(merged.stickerLevel.unlocked).length > 0)
+              || (merged.stickerLevel.placed && Object.keys(merged.stickerLevel.placed).length > 0)));
+          merged.stickerOnboarding = {
+            hasSeenEntryTutorial: hadStickerActivity,
+            hasCreatedCharacter: hadStickerActivity,
+            hasChosenRoom: hadStickerActivity,
+            hasSeenPlacementTutorial: hadStickerActivity,
+            hasSeenPlusTutorial: hadStickerActivity,
+          };
+        } else {
+          ["hasSeenEntryTutorial", "hasCreatedCharacter", "hasChosenRoom", "hasSeenPlacementTutorial", "hasSeenPlusTutorial"].forEach((k) => {
+            if (typeof merged.stickerOnboarding[k] !== "boolean") merged.stickerOnboarding[k] = false;
+          });
+        }
+        if (typeof merged.stickerCharacter === "undefined") merged.stickerCharacter = null;
+        if (typeof merged.stickerRoomStyle === "undefined") merged.stickerRoomStyle = null;
         // The previous multi-room sticker-album state is no longer used.
         if (merged.stickerRooms) delete merged.stickerRooms;
         if (!merged.bpPremiumPackMeta || typeof merged.bpPremiumPackMeta !== "object") merged.bpPremiumPackMeta = {};
@@ -1470,6 +1504,117 @@
     return STICKER_LEVEL_DECOR.find((d) => d.id === stickerId) || null;
   }
 
+  // ===== Standalone Stickers onboarding data ================================
+  // Character-creation options. Art is a lightweight parametric SVG cat (no
+  // dedicated art assets), themed by these palettes / overlays.
+  const STICKER_CAT_COLORS = [
+    { key: "cream",  label: "Cream",  body: "#fdf3e2", ear: "#f6e2c4", line: "#cdb48c" },
+    { key: "ginger", label: "Ginger", body: "#f4ba6c", ear: "#e89f44", line: "#c47e2e" },
+    { key: "gray",   label: "Gray",   body: "#a9a9ad", ear: "#8f8f95", line: "#5f5f66" },
+    { key: "calico", label: "Calico", body: "#f1d6b0", ear: "#caa06a", line: "#9c7a4d" },
+  ];
+  const STICKER_CAT_CLOTHES = [
+    { key: "none",     label: "None",     color: null },
+    { key: "hoodie",   label: "Hoodie",   color: "#7fb5d8" },
+    { key: "scarf",    label: "Scarf",    color: "#e07a7a" },
+    { key: "overalls", label: "Overalls", color: "#6db97f" },
+  ];
+  const STICKER_CAT_HATS = [
+    { key: "none",  label: "None",  emoji: "" },
+    { key: "cap",   label: "Cap",   emoji: "🧢" },
+    { key: "bow",   label: "Bow",   emoji: "🎀" },
+    { key: "crown", label: "Crown", emoji: "👑" },
+  ];
+
+  // Selectable room palettes for "Choose your room". The isometric geometry is
+  // unchanged — only fills are themed. `rose` matches the legacy static room so
+  // existing players (who never chose a style) keep the exact same look.
+  const STICKER_ROOM_STYLES = [
+    { key: "rose",  label: "Rose",
+      wallR1: "#f8dde8", wallR2: "#ecbfd2", wallL1: "#f2cfdf", wallL2: "#dfadc6",
+      part1: "#fbe4ee", part2: "#edccdc", trim: "#e87aa0", win: "#f6dcef",
+      f1: "#f0bcd0", f2: "#f4d7e1", f3: "#f0c8da", f4: "#f7dde7", f5: "#e6cdd9", f6: "#e7bcd0", line: "#d99fba" },
+    { key: "cream", label: "Cream",
+      wallR1: "#fbeccb", wallR2: "#f2d79a", wallL1: "#f6e2b5", wallL2: "#e8c886",
+      part1: "#fdf2d8", part2: "#f0dcab", trim: "#e0a94c", win: "#dff0e6",
+      f1: "#bfe3c2", f2: "#d4ecd1", f3: "#c8e6ca", f4: "#ddf0d8", f5: "#cde0c6", f6: "#bce3b0", line: "#a9c79f" },
+    { key: "sky",   label: "Sky",
+      wallR1: "#dceef8", wallR2: "#bcd9ea", wallL1: "#cfe3f0", wallL2: "#aecde0",
+      part1: "#e7f3fa", part2: "#cfe2ee", trim: "#7fb6d6", win: "#fbe7d6",
+      f1: "#e2d7f0", f2: "#ece4f6", f3: "#e6def2", f4: "#efe8f8", f5: "#ddd2ec", f6: "#e0d2f0", line: "#b9a9d6" },
+    { key: "terra", label: "Terracotta",
+      wallR1: "#f3d8c0", wallR2: "#e2b18f", wallL1: "#eccbb0", wallL2: "#dba98a",
+      part1: "#f6e4d3", part2: "#e8d0bc", trim: "#c2744a", win: "#d8efe6",
+      f1: "#cbb08f", f2: "#dcc6a6", f3: "#d3bd9a", f4: "#e0cba6", f5: "#c9b08f", f6: "#bd9e7e", line: "#a98a6a" },
+  ];
+
+  function getStickerRoomStyleDef(key) {
+    return STICKER_ROOM_STYLES.find((s) => s.key === key) || STICKER_ROOM_STYLES[0];
+  }
+
+  // Starter stickers seeded into the tray on first room entry so the player has
+  // items to learn placement with. All ids exist in STICKER_LEVEL_DECOR.
+  const STICKER_STARTER_IDS = ["cat", "sofa", "lamp", "door", "picture"];
+
+  // Parametric isometric apartment SVG, themed by a room-style palette. Same
+  // geometry as the static HTML room; gradient ids are namespaced per style.
+  function buildStickerApartmentSVG(styleKey) {
+    const p = getStickerRoomStyleDef(styleKey);
+    const g = "apt_" + p.key;
+    return ''
+      + '<svg class="sticker-apartment-svg" viewBox="0 0 320 360" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" aria-hidden="true">'
+      + '<defs>'
+      + '<linearGradient id="' + g + 'WallR" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + p.wallR1 + '"/><stop offset="1" stop-color="' + p.wallR2 + '"/></linearGradient>'
+      + '<linearGradient id="' + g + 'WallL" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + p.wallL1 + '"/><stop offset="1" stop-color="' + p.wallL2 + '"/></linearGradient>'
+      + '<linearGradient id="' + g + 'Part" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + p.part1 + '"/><stop offset="1" stop-color="' + p.part2 + '"/></linearGradient>'
+      + '</defs>'
+      + '<polygon points="160.0,150.0 304.0,211.7 304.0,155.7 160.0,94.0" fill="url(#' + g + 'WallR)" />'
+      + '<polygon points="160.0,150.0 16.0,211.7 16.0,155.7 160.0,94.0" fill="url(#' + g + 'WallL)" />'
+      + '<polygon points="160.0,94.0 304.0,155.7 304.0,151.7 160.0,90.0" fill="' + p.trim + '" />'
+      + '<polygon points="160.0,94.0 16.0,155.7 16.0,151.7 160.0,90.0" fill="' + p.trim + '" />'
+      + '<polygon points="263.2,154.2 289.6,165.6 289.6,187.6 263.2,176.2" fill="' + p.win + '" stroke="' + p.line + '" stroke-width="2"/>'
+      + '<polygon points="56.8,154.2 30.4,165.6 30.4,187.6 56.8,176.2" fill="' + p.win + '" stroke="' + p.line + '" stroke-width="2"/>'
+      + '<line x1="160.0" y1="94.0" x2="160.0" y2="150.0" stroke="' + p.line + '" stroke-width="1.5" stroke-opacity="0.4"/>'
+      + '<polygon points="160.0,150.0 232.0,180.9 160.0,211.7 88.0,180.9" fill="' + p.f1 + '" />'
+      + '<polygon points="232.0,180.9 304.0,211.7 232.0,242.6 160.0,211.7" fill="' + p.f2 + '" />'
+      + '<polygon points="88.0,180.9 160.0,211.7 88.0,242.6 16.0,211.7" fill="' + p.f3 + '" />'
+      + '<polygon points="160.0,211.7 232.0,242.6 160.0,273.5 88.0,242.6" fill="' + p.f4 + '" />'
+      + '<polygon points="208.0,252.9 256.0,273.5 208.0,294.1 160.0,273.5" fill="' + p.f5 + '" />'
+      + '<polygon points="160.0,150.0 232.0,180.9 160.0,211.7 88.0,180.9" fill="none" stroke="' + p.line + '" stroke-width="1.2" stroke-opacity="0.45"/>'
+      + '<polygon points="232.0,180.9 304.0,211.7 232.0,242.6 160.0,211.7" fill="none" stroke="' + p.line + '" stroke-width="1.2" stroke-opacity="0.45"/>'
+      + '<polygon points="88.0,180.9 160.0,211.7 88.0,242.6 16.0,211.7" fill="none" stroke="' + p.line + '" stroke-width="1.2" stroke-opacity="0.45"/>'
+      + '<polygon points="160.0,211.7 232.0,242.6 160.0,273.5 88.0,242.6" fill="none" stroke="' + p.line + '" stroke-width="1.2" stroke-opacity="0.45"/>'
+      + '<polygon points="232.0,180.9 160.0,211.7 160.0,181.7 232.0,150.9" fill="url(#' + g + 'Part)" />'
+      + '<polygon points="88.0,180.9 160.0,211.7 160.0,181.7 88.0,150.9" fill="url(#' + g + 'Part)" />'
+      + '<polygon points="160.0,211.7 232.0,242.6 232.0,212.6 160.0,181.7" fill="url(#' + g + 'Part)" />'
+      + '<polygon points="160.0,211.7 88.0,242.6 88.0,212.6 160.0,181.7" fill="url(#' + g + 'Part)" />'
+      + '<polygon points="208.0,252.9 160.0,273.5 160.0,261.5 208.0,240.9" fill="' + p.f6 + '" />'
+      + '</svg>';
+  }
+
+  // Parametric cat mascot SVG for character creation / the room "cat" sticker.
+  function buildStickerCatSVG(char) {
+    const col = STICKER_CAT_COLORS.find((c) => c.key === (char && char.color)) || STICKER_CAT_COLORS[0];
+    const clo = STICKER_CAT_CLOTHES.find((c) => c.key === (char && char.clothes)) || STICKER_CAT_CLOTHES[0];
+    const hat = STICKER_CAT_HATS.find((c) => c.key === (char && char.hat)) || STICKER_CAT_HATS[0];
+    const clothes = clo.color
+      ? '<path d="M37 80 Q60 95 83 80 L80 102 Q60 113 40 102 Z" fill="' + clo.color + '" stroke="' + col.line + '" stroke-width="1.5" opacity="0.95"/>'
+      : '';
+    const hatEl = hat.emoji ? '<text x="60" y="26" text-anchor="middle" font-size="28">' + hat.emoji + '</text>' : '';
+    return ''
+      + '<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">'
+      + '<path d="M44 36 L36 16 L56 30 Z" fill="' + col.ear + '" stroke="' + col.line + '" stroke-width="3" stroke-linejoin="round"/>'
+      + '<path d="M76 36 L84 16 L64 30 Z" fill="' + col.ear + '" stroke="' + col.line + '" stroke-width="3" stroke-linejoin="round"/>'
+      + '<path d="M38 44 Q38 26 60 26 Q82 26 82 44 L82 88 Q82 106 60 106 Q38 106 38 88 Z" fill="' + col.body + '" stroke="' + col.line + '" stroke-width="3"/>'
+      + '<path d="M80 80 Q92 86 84 100" fill="none" stroke="' + col.line + '" stroke-width="3" stroke-linecap="round"/>'
+      + clothes
+      + '<circle cx="51" cy="58" r="3.4" fill="#3a3330"/>'
+      + '<circle cx="69" cy="58" r="3.4" fill="#3a3330"/>'
+      + '<path d="M55 66 Q60 71 65 66" fill="none" stroke="#3a3330" stroke-width="2.2" stroke-linecap="round"/>'
+      + hatEl
+      + '</svg>';
+  }
+
   function getDuplicateStarRewardByCard(cardId, fallbackRarity) {
     const def = CARD_DEFS[cardId] || null;
     const stars = def && typeof def.rarityStars === "number" ? def.rarityStars : (typeof fallbackRarity === "number" ? fallbackRarity : 1);
@@ -1983,6 +2128,58 @@
       this._persist();
     }
 
+    // ---- Stickers onboarding / character / room accessors -----------------
+    _ensureStickerOnboarding() {
+      const ob = this._save.stickerOnboarding;
+      if (!ob || typeof ob !== "object") {
+        this._save.stickerOnboarding = {
+          hasSeenEntryTutorial: false,
+          hasCreatedCharacter: false,
+          hasChosenRoom: false,
+          hasSeenPlacementTutorial: false,
+          hasSeenPlusTutorial: false,
+        };
+      }
+      return this._save.stickerOnboarding;
+    }
+
+    getStickerOnboarding() {
+      const ob = this._ensureStickerOnboarding();
+      return {
+        hasSeenEntryTutorial: !!ob.hasSeenEntryTutorial,
+        hasCreatedCharacter: !!ob.hasCreatedCharacter,
+        hasChosenRoom: !!ob.hasChosenRoom,
+        hasSeenPlacementTutorial: !!ob.hasSeenPlacementTutorial,
+        hasSeenPlusTutorial: !!ob.hasSeenPlusTutorial,
+      };
+    }
+
+    setStickerOnboardingFlag(key, value) {
+      const ob = this._ensureStickerOnboarding();
+      if (Object.prototype.hasOwnProperty.call(ob, key)) {
+        ob[key] = !!value;
+        this._persist();
+      }
+    }
+
+    getStickerCharacter() {
+      return this._save.stickerCharacter || null;
+    }
+
+    setStickerCharacter(character) {
+      this._save.stickerCharacter = character || null;
+      this._persist();
+    }
+
+    getStickerRoomStyle() {
+      return this._save.stickerRoomStyle || null;
+    }
+
+    setStickerRoomStyle(styleKey) {
+      this._save.stickerRoomStyle = styleKey || null;
+      this._persist();
+    }
+
     // Picks `count` random unique stickers from the still-locked pool (the pool
     // is already duplicate-free). Returns fewer than requested if the pool is
     // nearly empty. Defaults to 1 when no count is given.
@@ -2181,6 +2378,8 @@
 
     showAlbum(onBackCallback) {
       this._applyStickerGemCheat();
+      // Safety: never enter the room with the onboarding nav-hide still stuck on.
+      document.body.classList.remove("sticker-onb-active");
       this._onAlbumBackCallback = onBackCallback;
       this.app.ui.showScreen("album-screen");
       document.documentElement.classList.add("album-screen-active");
@@ -2196,6 +2395,10 @@
       window.addEventListener("keydown", this._albumEscapeHandler);
       this._renderStickerLevel();
       this._bindStickerLevelHeader();
+      // First-time players are guided through character creation → room
+      // selection → in-room placement/plus pointers. Returning players (flags
+      // already set) fall straight through to the normal room.
+      this._runStickerOnboarding();
       // No auto-opened pack on first entry: the empty tray shows the "+" tile,
       // which the player taps to open the 5-pack selection and seed the room.
     }
@@ -2209,6 +2412,17 @@
       };
     }
 
+    // Renders a sticker's art into `el`, substituting the player's custom cat
+    // for the "cat" sticker once a character has been created.
+    _applyStickerArt(el, def) {
+      setStickerArt(el, def);
+      const ch = this.cm.getStickerCharacter();
+      if (def && def.id === "cat" && ch) {
+        el.innerHTML = buildStickerCatSVG(ch);
+        el.classList.add("has-sticker-art");
+      }
+    }
+
     _renderStickerLevel() {
       const tray = document.getElementById("sticker-level-tray");
       const slotsHost = document.getElementById("sticker-level-placed");
@@ -2217,6 +2431,18 @@
       const pillFill = document.getElementById("sticker-level-pill-fill");
       const pillPercent = document.getElementById("sticker-level-pill-percent");
       if (!tray || !slotsHost) return;
+
+      // Apply the chosen room style (re-skin the apartment SVG). Only when a
+      // style was picked — existing players keep the static HTML room. Guarded
+      // by a dataset key so we only rebuild when the style actually changes.
+      const styleKey = this.cm.getStickerRoomStyle();
+      if (styleKey) {
+        const apt = document.querySelector("#sticker-level-room .sticker-apartment");
+        if (apt && apt.dataset.styleKey !== styleKey) {
+          apt.innerHTML = buildStickerApartmentSVG(styleKey);
+          apt.dataset.styleKey = styleKey;
+        }
+      }
 
       const state = this.cm.getStickerLevelState();
       const pct = state.total > 0 ? Math.round((state.placedCount / state.total) * 100) : 0;
@@ -2265,7 +2491,7 @@
         item.title = s.name;
         const glyph = document.createElement("span");
         glyph.className = "sticker-level-tray-glyph";
-        setStickerArt(glyph, s);
+        this._applyStickerArt(glyph, s);
         item.appendChild(glyph);
         this._bindStickerLevelDrag(item, s);
         tray.appendChild(item);
@@ -2335,7 +2561,7 @@
         cell.style.setProperty("--iso-scale", scale.toFixed(3));
         cell.style.zIndex = String(100 + Math.floor(depth * 900));
         cell.title = def.name;
-        setStickerArt(cell, def);
+        this._applyStickerArt(cell, def);
         slotsHost.appendChild(cell);
       });
 
@@ -2343,6 +2569,10 @@
       if (pillLabel) pillLabel.textContent = "LVL 1";
       if (pillFill) pillFill.style.width = pct + "%";
       if (pillPercent) pillPercent.textContent = pct + "%";
+
+      // Refresh first-time tutorial pointers (placement / plus) to match the
+      // freshly-rendered tray. No-op once onboarding is complete.
+      this._updateStickerTutorials();
     }
 
     // Free placement: drag a sticker out of the tray and drop it anywhere
@@ -2362,7 +2592,7 @@
 
         const ghost = document.createElement("div");
         ghost.className = "sticker-level-drag-ghost";
-        setStickerArt(ghost, sticker);
+        self._applyStickerArt(ghost, sticker);
         document.body.appendChild(ghost);
         const place = (x, y) => { ghost.style.left = x + "px"; ghost.style.top = y + "px"; };
         place(e.clientX, e.clientY);
@@ -2416,6 +2646,9 @@
     _onStickerLevelPlace(stickerId, pos) {
       const result = this.cm.placeStickerInLevel(stickerId, pos);
       if (!result) return;
+      // First successful drop dismisses the placement pointer for good.
+      const ob = this.cm.getStickerOnboarding();
+      if (!ob.hasSeenPlacementTutorial) this.cm.setStickerOnboardingFlag("hasSeenPlacementTutorial", true);
       this._renderStickerLevel();
       const placed = document.querySelector('#sticker-level-placed .sticker-slot[data-sticker-id="' + stickerId + '"]');
       if (placed) {
@@ -2600,6 +2833,242 @@
       t.classList.add("shop-toast--show");
       clearTimeout(this._stickerBuyToastTimer);
       this._stickerBuyToastTimer = setTimeout(() => t.classList.remove("shop-toast--show"), 1400);
+    }
+
+    // ===== First-time Stickers onboarding flow =============================
+    _anyStickerOnbOverlayOpen() {
+      const a = document.getElementById("sticker-create-overlay");
+      const b = document.getElementById("sticker-room-overlay");
+      return (a && !a.classList.contains("hidden")) || (b && !b.classList.contains("hidden"));
+    }
+
+    // Orchestrator: decide which onboarding step (if any) runs when Stickers
+    // opens. Character creation → room selection → in-room tutorials.
+    _runStickerOnboarding() {
+      const ob = this.cm.getStickerOnboarding();
+      if (!ob.hasCreatedCharacter) { this._openStickerCreate(); return; }
+      if (!ob.hasChosenRoom) { this._openStickerRoomSelect(); return; }
+      this._updateStickerTutorials();
+    }
+
+    // ---- Character creation ----
+    _openStickerCreate() {
+      const existing = this.cm.getStickerCharacter();
+      this._createDraft = {
+        color: (existing && existing.color) || STICKER_CAT_COLORS[0].key,
+        clothes: (existing && existing.clothes) || STICKER_CAT_CLOTHES[0].key,
+        hat: (existing && existing.hat) || STICKER_CAT_HATS[0].key,
+      };
+      this._createTab = "color";
+      this._renderStickerCreate();
+      const ov = document.getElementById("sticker-create-overlay");
+      if (ov) ov.classList.remove("hidden");
+      document.body.classList.add("sticker-onb-active");
+      this._hideStickerTutor();
+      const next = document.getElementById("btn-sticker-create-next");
+      if (next) next.onclick = () => this._confirmStickerCreate();
+    }
+
+    _renderStickerCreate() {
+      const preview = document.getElementById("sticker-create-preview");
+      if (preview) preview.innerHTML = buildStickerCatSVG(this._createDraft);
+      const tabHost = document.getElementById("sticker-create-tabs");
+      const TABS = [
+        { key: "color", icon: "🎨" },
+        { key: "clothes", icon: "👕" },
+        { key: "hat", icon: "🎩" },
+      ];
+      if (tabHost) {
+        tabHost.innerHTML = "";
+        TABS.forEach((t) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "sticker-onb-tab" + (t.key === this._createTab ? " sticker-onb-tab--active" : "");
+          b.innerHTML = '<span class="sticker-onb-tab-icon">' + t.icon + "</span>";
+          b.onclick = () => { this._createTab = t.key; this._renderStickerCreate(); };
+          tabHost.appendChild(b);
+        });
+      }
+      const optHost = document.getElementById("sticker-create-options");
+      if (!optHost) return;
+      optHost.innerHTML = "";
+      let list, field;
+      if (this._createTab === "clothes") { list = STICKER_CAT_CLOTHES; field = "clothes"; }
+      else if (this._createTab === "hat") { list = STICKER_CAT_HATS; field = "hat"; }
+      else { list = STICKER_CAT_COLORS; field = "color"; }
+      list.forEach((opt) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "sticker-onb-option" + (this._createDraft[field] === opt.key ? " sticker-onb-option--active" : "");
+        const draft = Object.assign({}, this._createDraft);
+        draft[field] = opt.key;
+        card.innerHTML = '<span class="sticker-onb-option-art">' + buildStickerCatSVG(draft) + "</span>";
+        card.setAttribute("aria-label", opt.label);
+        card.title = opt.label;
+        card.onclick = () => { this._createDraft[field] = opt.key; this._renderStickerCreate(); };
+        optHost.appendChild(card);
+      });
+    }
+
+    _confirmStickerCreate() {
+      this.cm.setStickerCharacter(Object.assign({}, this._createDraft));
+      this.cm.setStickerOnboardingFlag("hasCreatedCharacter", true);
+      const ov = document.getElementById("sticker-create-overlay");
+      if (ov) ov.classList.add("hidden");
+      this._renderStickerLevel();
+      this._openStickerRoomSelect();
+    }
+
+    // ---- Room style selection ----
+    _openStickerRoomSelect() {
+      const existing = this.cm.getStickerRoomStyle();
+      this._roomDraft = existing || STICKER_ROOM_STYLES[0].key;
+      this._renderStickerRoomSelect();
+      const ov = document.getElementById("sticker-room-overlay");
+      if (ov) ov.classList.remove("hidden");
+      document.body.classList.add("sticker-onb-active");
+      this._hideStickerTutor();
+      const confirm = document.getElementById("btn-sticker-room-confirm");
+      if (confirm) confirm.onclick = () => this._confirmStickerRoom();
+    }
+
+    _renderStickerRoomSelect() {
+      const preview = document.getElementById("sticker-room-preview");
+      if (preview) preview.innerHTML = buildStickerApartmentSVG(this._roomDraft);
+      const optHost = document.getElementById("sticker-room-options");
+      if (!optHost) return;
+      optHost.innerHTML = "";
+      STICKER_ROOM_STYLES.forEach((style) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "sticker-onb-room-card" + (this._roomDraft === style.key ? " sticker-onb-room-card--active" : "");
+        card.setAttribute("aria-label", style.label);
+        card.title = style.label;
+        card.innerHTML =
+          '<span class="sticker-onb-room-swatch">' +
+            '<span class="sticker-onb-room-wall" style="background:' + style.wallR2 + '"></span>' +
+            '<span class="sticker-onb-room-floor" style="background:' + style.f2 + '"></span>' +
+          "</span>" +
+          '<span class="sticker-onb-room-label">' + style.label + "</span>";
+        card.onclick = () => { this._roomDraft = style.key; this._renderStickerRoomSelect(); };
+        optHost.appendChild(card);
+      });
+    }
+
+    _confirmStickerRoom() {
+      this.cm.setStickerRoomStyle(this._roomDraft);
+      this.cm.setStickerOnboardingFlag("hasChosenRoom", true);
+      // Seed starter stickers so the tray has items for the placement tutorial,
+      // but only if the player hasn't unlocked anything yet.
+      const state = this.cm.getStickerLevelState();
+      const hasAny = Object.keys(state.unlockedMap).length > 0 || state.placedCount > 0;
+      if (!hasAny) {
+        this.cm.unlockStickers(STICKER_STARTER_IDS);
+        this.cm.markFirstPackOpened();
+      }
+      const ov = document.getElementById("sticker-room-overlay");
+      if (ov) ov.classList.add("hidden");
+      document.body.classList.remove("sticker-onb-active");
+      this._renderStickerLevel();
+      setTimeout(() => this._updateStickerTutorials(), 60);
+    }
+
+    // ---- In-room tutorial pointers (placement + plus) ----
+    _hideStickerTutor() {
+      const layer = document.getElementById("sticker-tutor-layer");
+      if (layer) layer.classList.add("hidden");
+      const finger = document.getElementById("sticker-tutor-finger");
+      if (finger) finger.classList.remove("sticker-tutor-finger--drag");
+    }
+
+    _updateStickerTutorials() {
+      const ob = this.cm.getStickerOnboarding();
+      if (!ob.hasChosenRoom || this._anyStickerOnbOverlayOpen()) { this._hideStickerTutor(); return; }
+      const tray = document.getElementById("sticker-level-tray");
+      if (!tray) { this._hideStickerTutor(); return; }
+      const trayItems = tray.querySelectorAll(".sticker-level-tray-item:not(.sticker-level-tray-item--plus):not(.sticker-level-tray-item--pack)");
+      const plusTile = tray.querySelector(".sticker-level-tray-item--plus");
+      if (!ob.hasSeenPlacementTutorial && trayItems.length > 0) {
+        this._pointStickerFingerAt(trayItems[0], {
+          text: "Drag an item into the room to decorate!",
+          dragTo: document.getElementById("sticker-level-placed"),
+        });
+      } else if (!ob.hasSeenPlusTutorial && plusTile) {
+        this._pointStickerFingerAt(plusTile, { text: "Tap + to get more stickers!" });
+        this.cm.setStickerOnboardingFlag("hasSeenPlusTutorial", true);
+      } else {
+        this._hideStickerTutor();
+      }
+    }
+
+    _pointStickerFingerAt(targetEl, opts) {
+      opts = opts || {};
+      const layer = document.getElementById("sticker-tutor-layer");
+      const finger = document.getElementById("sticker-tutor-finger");
+      const bubble = document.getElementById("sticker-tutor-bubble");
+      const inner = document.querySelector("#album-screen .sticker-level-inner");
+      if (!layer || !finger || !bubble || !inner || !targetEl) return;
+      const ir = inner.getBoundingClientRect();
+      const tr = targetEl.getBoundingClientRect();
+      const cx = tr.left + tr.width / 2 - ir.left;
+      const cy = tr.top + tr.height / 2 - ir.top;
+      finger.style.left = cx + "px";
+      finger.style.top = cy + "px";
+      bubble.textContent = opts.text || "";
+      const bx = Math.max(12, Math.min(ir.width - 12, cx));
+      bubble.style.left = bx + "px";
+      bubble.style.top = Math.max(8, cy - 96) + "px";
+      if (opts.dragTo) {
+        const dr = opts.dragTo.getBoundingClientRect();
+        const dx = (dr.left + dr.width / 2 - ir.left) - cx;
+        const dy = (dr.top + dr.height / 2 - ir.top) - cy;
+        finger.style.setProperty("--drag-dx", dx.toFixed(0) + "px");
+        finger.style.setProperty("--drag-dy", dy.toFixed(0) + "px");
+        finger.classList.add("sticker-tutor-finger--drag");
+      } else {
+        finger.classList.remove("sticker-tutor-finger--drag");
+      }
+      layer.classList.remove("hidden");
+    }
+
+    // ---- Home-screen entry pointer (points at the Stickers nav button) ----
+    _maybeShowStickerEntryTutorial() {
+      const ob = this.cm.getStickerOnboarding();
+      if (ob.hasSeenEntryTutorial || ob.hasCreatedCharacter) { this._hideStickerEntryFinger(); return; }
+      // The Stickers entry is the bottom-nav "Stickers" button (#nav-collection).
+      const nav = document.getElementById("nav-collection");
+      if (!nav) return;
+      let f = document.getElementById("sticker-entry-finger");
+      if (!f) {
+        f = document.createElement("div");
+        f.id = "sticker-entry-finger";
+        f.className = "sticker-entry-finger hidden";
+        // Down-pointing hand: it hovers just above the button and points at it.
+        f.innerHTML = '<span class="sticker-entry-bubble">Decorate your room!</span><span class="sticker-entry-hand">👇</span>';
+        document.body.appendChild(f);
+      }
+      // Body-level + fixed + z-index above the PLAY button (z 260) and nav
+      // (z 200); the nav is its own stacking context, so a child there would be
+      // trapped behind PLAY. Anchor to the live button rect (no page-scale).
+      const place = () => {
+        const r = nav.getBoundingClientRect();
+        if (!r.width) return false;
+        f.style.left = Math.round(r.left + r.width / 2) + "px";
+        f.style.top = Math.round(r.top) + "px";
+        f.classList.remove("hidden");
+        return true;
+      };
+      if (!place()) requestAnimationFrame(place);
+    }
+
+    _hideStickerEntryFinger() {
+      const f = document.getElementById("sticker-entry-finger");
+      if (f) f.classList.add("hidden");
+    }
+
+    _markStickerEntrySeen() {
+      this.cm.setStickerOnboardingFlag("hasSeenEntryTutorial", true);
+      this._hideStickerEntryFinger();
     }
 
     _choosePack(tier, opts) {
@@ -4462,6 +4931,16 @@
       if (navId) {
         const navEl = document.getElementById(navId);
         if (navEl) navEl.classList.add("active");
+      }
+      // First-time Stickers entry pointer lives on the home screen, pointing at
+      // the Stickers nav button. Shown only until the player has been there.
+      if (window.gameApp && window.gameApp.collectionUI) {
+        const cui = window.gameApp.collectionUI;
+        if (id === "start-screen" && typeof cui._maybeShowStickerEntryTutorial === "function") {
+          setTimeout(() => cui._maybeShowStickerEntryTutorial(), 0);
+        } else if (typeof cui._hideStickerEntryFinger === "function") {
+          cui._hideStickerEntryFinger();
+        }
       }
       if (window.gameApp && typeof window.gameApp._updateCheatAutoButton === "function") {
         window.gameApp._updateCheatAutoButton();
@@ -6705,6 +7184,9 @@
       if (leaderboardBtn) leaderboardBtn.onclick = () => this.onLeaderboardTrophyClick();
       const openCollection = () => {
         if (this._externalLevelActive) this._stopExternalPlayableLevel();
+        if (this.collectionUI && typeof this.collectionUI._markStickerEntrySeen === "function") {
+          this.collectionUI._markStickerEntrySeen();
+        }
         this.collectionUI.showAlbum();
       };
       const navCollection = document.getElementById("nav-collection");

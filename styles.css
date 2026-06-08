@@ -13355,3 +13355,254 @@ body.shop-screen-active .home-event-widget {
   scrollbar-width: none;
 }
 .sticker-buy-grid::-webkit-scrollbar { display: none; }
+
+/* ============================================================================
+   Standalone Stickers — first-time onboarding (character creation, room
+   selection, and tutorial finger pointers). Scoped to the Stickers screen;
+   does not touch the Shop tab, packs, or the "+" buy modal.
+   ========================================================================== */
+.sticker-onb-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  background:
+    radial-gradient(120% 80% at 50% 0%, #fff6e6 0%, #fbe9cf 55%, #f6ddba 100%);
+}
+.sticker-onb-overlay.hidden { display: none; }
+/* Hide the bottom nav while an onboarding overlay is open so the picker is
+   never covered or pushed off-screen by it. */
+body.sticker-onb-active .bottom-nav { display: none !important; }
+.sticker-onb-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 16px 22px;
+}
+.sticker-onb-title {
+  order: 0;
+  flex: 0 0 auto;
+  margin: 6px 0 0;
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 900;
+  letter-spacing: 1px;
+  color: #e0902f;
+  text-shadow: 0 2px 0 #fff7e9;
+}
+.sticker-onb-preview {
+  order: 1;
+  flex: 0 0 auto;
+  height: 28vh;
+  min-height: 140px;
+  display: grid;
+  place-items: center;
+}
+.sticker-onb-preview svg {
+  width: clamp(130px, 36vw, 175px);
+  height: clamp(130px, 36vw, 175px);
+  filter: drop-shadow(0 8px 14px rgba(180,130,70,0.25));
+}
+/* Picker sits centered in the middle of the screen, all options visible. */
+.sticker-onb-picker {
+  order: 2;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-self: center;
+  width: 100%;
+  max-width: 360px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 18px 14px;
+  background: rgba(255, 248, 234, 0.72);
+  border: 3px solid #efd6ad;
+  border-radius: 22px;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.06);
+}
+.sticker-onb-tabs { display: flex; gap: 8px; justify-content: center; }
+.sticker-onb-tab {
+  width: 56px;
+  height: 46px;
+  border: 3px solid #e7bd83;
+  border-radius: 14px;
+  background: #f6e6cb;
+  font-size: 1.15rem;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.sticker-onb-tab--active { background: #fff7ea; border-color: #f4a23c; box-shadow: 0 3px 0 #d9a93f; }
+.sticker-onb-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+}
+.sticker-onb-option {
+  flex: 0 0 auto;
+  width: 74px;
+  height: 74px;
+  padding: 4px;
+  border: 3px solid #fff7ea;
+  border-radius: 16px;
+  background: #fffdf8;
+  box-shadow: 0 3px 0 #d9b07a;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.sticker-onb-option--active { border-color: #6fbf5e; box-shadow: 0 3px 0 #4f9a40; }
+.sticker-onb-option-art { width: 100%; height: 100%; display: block; }
+.sticker-onb-option-art svg { width: 100%; height: 100%; }
+.sticker-onb-next {
+  order: 3;
+  flex: 0 0 auto;
+  align-self: center;
+  margin: 4px auto 0;
+  padding: 12px 38px;
+  border: 3px solid #fff7ea;
+  border-radius: 16px;
+  background: #f4a23c;
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 900;
+  letter-spacing: 1px;
+  box-shadow: 0 5px 0 #c87a23;
+  cursor: pointer;
+}
+.sticker-onb-next:active { transform: translateY(2px); box-shadow: 0 3px 0 #c87a23; }
+.sticker-onb-next--room { align-self: center; margin: 4px auto 0; }
+/* Room selection */
+.sticker-onb-room-preview {
+  order: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 6px 0;
+}
+.sticker-onb-room-preview svg {
+  width: clamp(220px, 74vw, 310px);
+  height: auto;
+  filter: drop-shadow(0 8px 16px rgba(160,120,70,0.25));
+}
+/* Room overlay: keep the big isometric preview centered and let the swatch
+   picker stay compact at the bottom (rather than the create-screen's tall,
+   centered picker). */
+#sticker-room-overlay .sticker-onb-picker {
+  flex: 0 0 auto;
+  margin: 4px 0 0;
+}
+.sticker-onb-options--rooms { gap: 12px; padding: 4px; }
+.sticker-onb-room-card {
+  flex: 0 0 auto;
+  width: 88px;
+  padding: 6px 6px 8px;
+  border: 3px solid #fff7ea;
+  border-radius: 16px;
+  background: #fffdf8;
+  box-shadow: 0 3px 0 #d9b07a;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+.sticker-onb-room-card--active { border-color: #6fbf5e; box-shadow: 0 3px 0 #4f9a40; }
+.sticker-onb-room-swatch {
+  width: 100%;
+  height: 56px;
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 2px solid #eadbbf;
+}
+.sticker-onb-room-wall { flex: 3; }
+.sticker-onb-room-floor { flex: 2; }
+.sticker-onb-room-label { font-size: 0.74rem; font-weight: 800; color: #9a6b30; }
+
+/* In-room tutorial finger (placement + plus pointers) */
+.sticker-tutor-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 55;
+  pointer-events: none;
+  overflow: hidden;
+}
+.sticker-tutor-layer.hidden { display: none; }
+.sticker-tutor-bubble {
+  position: absolute;
+  transform: translate(-50%, 0);
+  background: #fff;
+  color: #7a5a2e;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.3;
+  text-align: center;
+  max-width: 220px;
+  padding: 9px 13px;
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+}
+.sticker-tutor-finger {
+  position: absolute;
+  transform: translate(-30%, -10%);
+  font-size: 2.1rem;
+  filter: drop-shadow(0 3px 6px rgba(0,0,0,0.35));
+  animation: stickerTutorBob 1s ease-in-out infinite;
+}
+@keyframes stickerTutorBob {
+  0%, 100% { transform: translate(-30%, -10%); }
+  50% { transform: translate(-30%, -22%); }
+}
+.sticker-tutor-finger.sticker-tutor-finger--drag {
+  animation: stickerTutorDrag 2s ease-in-out infinite;
+}
+@keyframes stickerTutorDrag {
+  0%   { transform: translate(-30%, -10%); }
+  25%  { transform: translate(-30%, -18%) scale(0.94); }
+  70%  { transform: translate(calc(-30% + var(--drag-dx, 40px)), calc(-10% + var(--drag-dy, -70px))); }
+  80%  { transform: translate(calc(-30% + var(--drag-dx, 40px)), calc(-10% + var(--drag-dy, -70px))) scale(1.06); }
+  100% { transform: translate(-30%, -10%); }
+}
+
+/* Home-screen entry pointer — body-level, fixed, anchored to the live Stickers
+   nav button rect. z-index sits above the PLAY button (z 260) and nav (z 200),
+   which are separate stacking contexts that would otherwise hide it. The hand
+   hovers just above the button (translate -100% Y) and points down at it. */
+.sticker-entry-finger {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  z-index: 9999;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.sticker-entry-finger.hidden { display: none; }
+.sticker-entry-bubble {
+  background: #fff;
+  color: #7a5a2e;
+  font-size: 0.8rem;
+  font-weight: 800;
+  padding: 7px 12px;
+  border-radius: 13px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+  white-space: nowrap;
+}
+.sticker-entry-hand {
+  font-size: 2rem;
+  filter: drop-shadow(0 3px 6px rgba(0,0,0,0.35));
+  animation: stickerEntryBob 1s ease-in-out infinite;
+}
+@keyframes stickerEntryBob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(6px); }
+}

@@ -328,6 +328,34 @@
               </div>
             </div>
           </div>
+          <!-- First-time onboarding: character creation -->
+          <div id="sticker-create-overlay" class="sticker-onb-overlay hidden" role="dialog" aria-modal="true" aria-label="Create your cat">
+            <div class="sticker-onb-inner">
+              <h2 class="sticker-onb-title">CREATE YOUR CAT</h2>
+              <div id="sticker-create-preview" class="sticker-onb-preview" aria-hidden="true"></div>
+              <button type="button" id="btn-sticker-create-next" class="sticker-onb-next">NEXT</button>
+              <div class="sticker-onb-picker">
+                <div id="sticker-create-tabs" class="sticker-onb-tabs" role="tablist"></div>
+                <div id="sticker-create-options" class="sticker-onb-options" role="list"></div>
+              </div>
+            </div>
+          </div>
+          <!-- First-time onboarding: room style selection -->
+          <div id="sticker-room-overlay" class="sticker-onb-overlay hidden" role="dialog" aria-modal="true" aria-label="Choose your room">
+            <div class="sticker-onb-inner">
+              <h2 class="sticker-onb-title">CHOOSE YOUR ROOM</h2>
+              <div id="sticker-room-preview" class="sticker-onb-room-preview" aria-hidden="true"></div>
+              <div class="sticker-onb-picker">
+                <div id="sticker-room-options" class="sticker-onb-options sticker-onb-options--rooms" role="list"></div>
+              </div>
+              <button type="button" id="btn-sticker-room-confirm" class="sticker-onb-next sticker-onb-next--room">NEXT</button>
+            </div>
+          </div>
+          <!-- Tutorial finger layer (placement + plus pointers) -->
+          <div id="sticker-tutor-layer" class="sticker-tutor-layer hidden" aria-hidden="true">
+            <div id="sticker-tutor-bubble" class="sticker-tutor-bubble"></div>
+            <div id="sticker-tutor-finger" class="sticker-tutor-finger">👆</div>
+          </div>
         </div>
       </section>
 
