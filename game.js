@@ -9049,8 +9049,12 @@
     }
 
     resetProgress() {
+      // Reset the persisted save, then hard-reload so the fresh state loads
+      // cleanly. The previous version refreshed every widget in-place inside a
+      // try/catch that swallowed errors — if any single refresh threw, the
+      // button silently did nothing. A reload from the just-written save is
+      // robust against that.
       try {
-        this._clearBattlePassTutorial();
         const music = this._save.musicOn;
         const sfx = this._save.sfxOn;
         Object.assign(this._save, getDefaultSave());
@@ -9062,15 +9066,23 @@
         if (!this._save.lostTempleEvent) this._save.lostTempleEvent = { startAt: now, endAt: now + EVENT_DURATION_MS };
         this.currentLevelIndex = 0;
         saveSave(this._save);
+      } catch (e) {
+        if (typeof console !== "undefined") console.error("resetProgress: save failed", e);
+      }
+      try { document.body.classList.remove("sticker-onb-active"); } catch (_) {}
+      // Reload to rebuild all UI from the clean save. Fall back to an in-place
+      // refresh if reload is unavailable for any reason.
+      try {
+        window.location.reload();
+        return;
+      } catch (_) {}
+      try {
         this._applySaveToUI();
-        this.updateWheelWidget();
-        this.updateRaceEventWidget();
-        this.lostTempleManager.updateWidget();
-        this.rubyCaveManager.resetFromSave();
-        this.collectionUI.updateCollectionButtons();
         this.ui.hideSettingsModal();
         this.ui.showScreen("start-screen");
-      } catch (_) {}
+      } catch (e) {
+        if (typeof console !== "undefined") console.error("resetProgress: refresh failed", e);
+      }
     }
 
     cheatOpenAllAlbums() {
